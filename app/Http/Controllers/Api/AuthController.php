@@ -132,12 +132,12 @@ class AuthController extends Controller
             $tokenRaw = $user->createToken('auth-token')->plainTextToken;
             $token = explode('|', $tokenRaw, 2)[1];
 
-            $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+            $frontendUrl = config('app.frontend_url');
             
             return redirect()->away($frontendUrl . '/auth/callback?token=' . $token);
 
         } catch (\Exception $e) {
-            $frontendUrl = env('FRONTEND_URL', 'http://localhost:3000');
+            $frontendUrl = config('app.frontend_url');
             return redirect()->away($frontendUrl . '/login?error=google_auth_failed');
         }
     }
