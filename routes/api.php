@@ -54,6 +54,7 @@ Route::prefix('auth')->controller(AuthController::class)->group(function () {
 */
 Route::middleware('auth:sanctum')->group(function () {
     Route::put('/profile/update', [ProfileController::class, 'update']);
+    Route::put('/profile/kategori', [ProfileController::class, 'updateKategori']);
     Route::post('/access-codes/redeem', [AccessCodeController::class, 'redeem']);
     Route::get('/ticket-logs', [TicketLogController::class, 'index']);
     Route::get('/subtests', [SubtestController::class, 'index']);

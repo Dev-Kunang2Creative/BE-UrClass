@@ -26,6 +26,7 @@ class SubtestController extends Controller
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255', 'unique:subtests,name'],
             'category' => ['required', 'in:TPS,Literasi'],
+            'exam_type' => ['required', 'in:utbk,cpns'],
             'max_questions' => ['required', 'integer', 'min:1'],
         ]);
 
@@ -43,6 +44,7 @@ class SubtestController extends Controller
         $validated = $request->validate([
             'name'          => ['required', 'string', 'max:255', 'unique:subtests,name,' . $subtest->id],
             'category'      => ['required', 'in:TPS,Literasi'],
+            'exam_type'     => ['required', 'in:utbk,cpns'],
             'max_questions' => ['sometimes', 'integer', 'min:0'],
         ]);
 

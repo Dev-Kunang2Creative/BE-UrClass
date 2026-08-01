@@ -12,6 +12,7 @@ class Subtest extends Model
     protected $fillable = [
         'name',
         'category',
+        'exam_type',
         'max_questions',
     ];
 

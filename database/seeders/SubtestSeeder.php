@@ -14,19 +14,24 @@ class SubtestSeeder extends Seeder
     {
         //
         $items = [
-            ['name' => 'Penalaran Umum',                    'category' => 'TPS',     'max_questions' => 30],
-            ['name' => 'Pengetahuan dan Pemahaman Umum',    'category' => 'TPS',     'max_questions' => 20],
-            ['name' => 'Pemahaman Bacaan dan Menulis',      'category' => 'TPS',     'max_questions' => 20],
-            ['name' => 'Pengetahuan Kuantitatif',           'category' => 'TPS',     'max_questions' => 20],
-            ['name' => 'Literasi dalam Bahasa Indonesia',   'category' => 'Literasi','max_questions' => 30],
-            ['name' => 'Literasi dalam Bahasa Inggris',     'category' => 'Literasi','max_questions' => 20],
-            ['name' => 'Penalaran Matematika',              'category' => 'Literasi','max_questions' => 20],
+            // UTBK
+            ['name' => 'Penalaran Umum',                    'category' => 'TPS',     'exam_type' => 'utbk', 'max_questions' => 30],
+            ['name' => 'Pengetahuan dan Pemahaman Umum',    'category' => 'TPS',     'exam_type' => 'utbk', 'max_questions' => 20],
+            ['name' => 'Pemahaman Bacaan dan Menulis',      'category' => 'TPS',     'exam_type' => 'utbk', 'max_questions' => 20],
+            ['name' => 'Pengetahuan Kuantitatif',           'category' => 'TPS',     'exam_type' => 'utbk', 'max_questions' => 20],
+            ['name' => 'Literasi dalam Bahasa Indonesia',   'category' => 'Literasi','exam_type' => 'utbk', 'max_questions' => 30],
+            ['name' => 'Literasi dalam Bahasa Inggris',     'category' => 'Literasi','exam_type' => 'utbk', 'max_questions' => 20],
+            ['name' => 'Penalaran Matematika',              'category' => 'Literasi','exam_type' => 'utbk', 'max_questions' => 20],
+            // CPNS
+            ['name' => 'Tes Wawasan Kebangsaan (TWK)',      'category' => 'TPS',     'exam_type' => 'cpns', 'max_questions' => 30],
+            ['name' => 'Tes Intelegensi Umum (TIU)',        'category' => 'TPS',     'exam_type' => 'cpns', 'max_questions' => 35],
+            ['name' => 'Tes Karakteristik Pribadi (TKP)',   'category' => 'TPS',     'exam_type' => 'cpns', 'max_questions' => 45],
         ];
 
         foreach ($items as $item) {
             Subtest::updateOrCreate(
                 ['name' => $item['name']],
-                ['category' => $item['category'], 'max_questions' => $item['max_questions']]
+                ['category' => $item['category'], 'exam_type' => $item['exam_type'], 'max_questions' => $item['max_questions']]
             );
         }
     }

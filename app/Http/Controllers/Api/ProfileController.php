@@ -8,6 +8,21 @@ use Illuminate\Http\Request;
 
 class ProfileController extends Controller
 {
+    public function updateKategori(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'kategori' => ['required', 'in:utbk,cpns'],
+        ]);
+
+        $user = $request->user();
+        $user->update($validated);
+
+        return response()->json([
+            'message' => 'Kategori berhasil disimpan',
+            'user' => $user->fresh(),
+        ]);
+    }
+
     public function update(Request $request): JsonResponse
     {
         $user = $request->user();

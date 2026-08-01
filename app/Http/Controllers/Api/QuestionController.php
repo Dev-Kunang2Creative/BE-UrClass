@@ -47,7 +47,7 @@ class QuestionController extends Controller
             'discussion' => ['nullable', 'string'],
             'discussion_image' => ['nullable', 'image', 'max:2048'],
             'correct_answer' => ['nullable', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
-            'order_no' => ['required', 'integer', 'min:1'],
+            'order_no' => ['nullable', 'integer', 'min:1'],
             'is_active' => ['nullable', 'boolean'],
             
             'options' => ['nullable', 'array'],
@@ -91,7 +91,7 @@ class QuestionController extends Controller
                 'discussion' => RichTextSanitizer::sanitize($validated['discussion'] ?? null),
                 'discussion_image' => $dImage,
                 'correct_answer' => $validated['question_type'] === 'essay' ? null : $validated['correct_answer'],
-                'order_no' => $validated['order_no'],
+                'order_no' => $validated['order_no'] ?? (Question::where('subtest_id', $subtest->id)->max('order_no') ?? 0) + 1,
                 'is_active' => $validated['is_active'] ?? true,
             ]);
 
