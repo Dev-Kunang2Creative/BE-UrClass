@@ -123,4 +123,14 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Frontend URL
+    |--------------------------------------------------------------------------
+    |
+    | The URL to the frontend application, used for redirections.
+    |
+    */
+    'frontend_url' => env('FRONTEND_URL', 'http://localhost:3000'),
+
 ];
