@@ -111,6 +111,8 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::get('/sales-report', [AdminSalesReportController::class, 'index']);
         Route::get('/fee-to-report', [AdminSalesReportController::class, 'feeTryout']);
         Route::get('/tryout-proof-images', [AdminTryoutProofController::class, 'index']);
+        Route::get('/tryout-proof-images/statuses', [AdminTryoutProofController::class, 'statuses']);
+        Route::patch('/tryout-proof-images/{access}/review', [AdminTryoutProofController::class, 'review']);
         Route::get('/audit-logs', [AdminAuditLogController::class, 'index']);
         Route::get('/audit-logs/modules', [AdminAuditLogController::class, 'modules']);
         Route::apiResource('ticket-redeem-codes', AdminTicketRedeemCodeController::class)

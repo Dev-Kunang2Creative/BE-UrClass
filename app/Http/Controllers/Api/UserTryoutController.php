@@ -11,6 +11,9 @@ use App\Models\TryoutSubtest;
 use App\Models\TryoutSubtestSession;
 use App\Models\UserAnswer;
 use App\Models\UserTryoutAccess;
+use App\Models\Subtest;
+use App\Services\ScoringService;
+use App\Services\RankingService;
 use App\Support\RichTextSanitizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -519,10 +522,22 @@ class UserTryoutController extends Controller
         }
 
         if ($answer && trim(strip_tags($answer)) !== '') {
-            $correctAnswer = $question->correct_answer ?? null;
-            $isCorrect = $question->question_type === 'essay'
-                ? true
-                : $answer === $correctAnswer;
+            // BRD A-07: skor dihitung oleh ScoringService sesuai skema subtes
+            // (irt / right_wrong / option_weight) agar tidak lagi hard-coded.
+            $subtest = Subtest::find($question->subtest_id);
+
+            if ($question->question_type === 'essay') {
+                $isCorrect = true;
+                $scoreValue = $subtest ? (float) ($subtest->score_correct ?? 1) : 1.0;
+            } else {
+                $scored = ScoringService::scoreAnswer(
+                    $question,
+                    $subtest ?: new Subtest(['name' => '', 'exam_type' => 'utbk']),
+                    $answer
+                );
+                $isCorrect = $scored['is_correct'];
+                $scoreValue = $scored['score'];
+            }
 
             UserAnswer::updateOrCreate(
                 [
@@ -532,6 +547,7 @@ class UserTryoutController extends Controller
                 [
                     'answer' => $answer,
                     'is_correct' => $isCorrect,
+                    'score' => $scoreValue,
                     'answered_at' => now(),
                 ]
             );
@@ -744,16 +760,57 @@ class UserTryoutController extends Controller
 
     public function leaderboard(Request $request, Tryout $tryout): JsonResponse
     {
+        // BRD P-10: ranking nasional / region / sekolah.
+        // Default 'national' agar pemanggilan lama tetap kompatibel.
+        $level = $request->query('level', RankingService::LEVEL_NATIONAL);
+        if (! in_array($level, [
+            RankingService::LEVEL_NATIONAL,
+            RankingService::LEVEL_REGION,
+            RankingService::LEVEL_SCHOOL,
+        ], true)) {
+            $level = RankingService::LEVEL_NATIONAL;
+        }
+
+        // BRD: hasil & ranking IRT baru terbit setelah periode/cohort ditutup.
+        if (! RankingService::isPublishable($tryout)) {
+            return response()->json([
+                'message' => 'Ranking IRT belum tersedia. Menunggu finalisasi periode tryout.',
+                'data' => [
+                    'level' => $level,
+                    'is_ready' => false,
+                    'release_date' => $tryout->end_date,
+                    'leaderboard' => [],
+                ],
+            ]);
+        }
+
         $subtestIds = TryoutSubtest::where('tryout_id', $tryout->id)->pluck('subtest_id');
         $totalQuestions = Question::whereIn('subtest_id', $subtestIds)
             ->where('is_active', true)
             ->count();
 
-        $sessions = TryoutSession::with(['user', 'answers'])
+        $sessionQuery = TryoutSession::with(['user', 'answers'])
             ->where('tryout_id', $tryout->id)
             ->where('attempt_number', 1)
-            ->where('status', 'finished')
-            ->get();
+            ->where('status', 'finished');
+
+        // Filter cakupan sesuai level yang diminta
+        $viewer = $request->user();
+        if ($level === RankingService::LEVEL_REGION) {
+            $province = $request->query('region_province') ?? $viewer?->region_province;
+            $sessionQuery->whereHas('user', function ($q) use ($province) {
+                $province ? $q->where('region_province', $province)
+                          : $q->whereNotNull('region_province');
+            });
+        } elseif ($level === RankingService::LEVEL_SCHOOL) {
+            $schoolId = $request->query('school_id') ?? $viewer?->school_id;
+            $sessionQuery->whereHas('user', function ($q) use ($schoolId) {
+                $schoolId ? $q->where('school_id', $schoolId)
+                          : $q->whereNotNull('school_id');
+            });
+        }
+
+        $sessions = $sessionQuery->get();
 
         $includeProofImages = $request->user()?->role === 'admin';
         $proofsByUser = $includeProofImages
@@ -823,6 +880,10 @@ class UserTryoutController extends Controller
                         'raw_score' => round($rawScore, 2),
                         'final_score' => round($finalScore, 2),
                     ],
+                    'school_id' => $session->user?->school_id,
+                    'school_name' => $session->user?->school_name,
+                    'region_province' => $session->user?->region_province,
+                    'region_city' => $session->user?->region_city,
                 ];
 
                 if ($includeProofImages) {
@@ -851,11 +912,34 @@ class UserTryoutController extends Controller
                 return $row;
             });
 
+        // Posisi peserta yang sedang melihat, pada level yang diminta
+        $myRank = null;
+        if ($viewer) {
+            foreach ($leaderboard as $row) {
+                if ((string) $row['user_id'] === (string) $viewer->id) {
+                    $myRank = [
+                        'rank' => $row['rank'],
+                        'score' => $row['score']['final_score'],
+                        'total_participants' => $leaderboard->count(),
+                    ];
+                    break;
+                }
+            }
+        }
+
         return response()->json([
             'data' => [
                 'tryout_id' => $tryout->id,
                 'tryout_title' => $tryout->title,
                 'use_irt' => $tryout->use_irt,
+                'level' => $level,
+                'is_ready' => true,
+                'scope' => [
+                    'region_province' => $request->query('region_province') ?? $viewer?->region_province,
+                    'school_id' => $request->query('school_id') ?? $viewer?->school_id,
+                ],
+                'my_rank' => $myRank,
+                'total_participants' => $leaderboard->count(),
                 'leaderboard_basis' => 'attempt_number_1',
                 'leaderboard' => $leaderboard,
             ],

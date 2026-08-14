@@ -11,6 +11,29 @@ class UserTryoutAccess extends Model
 
     protected $table = 'user_tryout_access';
 
+    // BRD: status seleksi peserta try out gratis
+    public const STATUS_SUBMITTED = 'submitted';
+    public const STATUS_UNDER_REVIEW = 'under_review';
+    public const STATUS_NEED_REVISION = 'need_revision';
+    public const STATUS_ACCEPTED = 'accepted';
+    public const STATUS_REJECTED = 'rejected';
+
+    public const SELECTION_STATUSES = [
+        self::STATUS_SUBMITTED,
+        self::STATUS_UNDER_REVIEW,
+        self::STATUS_NEED_REVISION,
+        self::STATUS_ACCEPTED,
+        self::STATUS_REJECTED,
+    ];
+
+    public const STATUS_LABELS = [
+        self::STATUS_SUBMITTED => 'Diajukan',
+        self::STATUS_UNDER_REVIEW => 'Ditinjau',
+        self::STATUS_NEED_REVISION => 'Perlu revisi',
+        self::STATUS_ACCEPTED => 'Diterima',
+        self::STATUS_REJECTED => 'Ditolak',
+    ];
+
     protected $fillable = [
         'user_id',
         'tryout_id',
@@ -19,13 +42,29 @@ class UserTryoutAccess extends Model
         'proof_images',
         'discussion_unlocked',
         'granted_at',
+        'selection_status',
+        'selection_note',
+        'selection_reviewed_at',
+        'selection_reviewed_by',
     ];
 
     protected $casts = [
         'granted_at' => 'datetime',
         'proof_images' => 'array',
         'discussion_unlocked' => 'boolean',
+        'selection_reviewed_at' => 'datetime',
     ];
+
+    public function getSelectionStatusLabelAttribute(): ?string
+    {
+        return self::STATUS_LABELS[$this->selection_status] ?? null;
+    }
+
+    /** Peserta dianggap lolos seleksi gratis bila statusnya accepted. */
+    public function isSelectionAccepted(): bool
+    {
+        return $this->selection_status === self::STATUS_ACCEPTED;
+    }
 
     public function user()
     {
@@ -40,5 +79,10 @@ class UserTryoutAccess extends Model
     public function accessCode()
     {
         return $this->belongsTo(AccessCode::class);
+    }
+
+    public function reviewer()
+    {
+        return $this->belongsTo(User::class, 'selection_reviewed_by');
     }
 }
