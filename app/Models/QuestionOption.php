@@ -11,6 +11,13 @@ class QuestionOption extends Model
         'option_key',
         'option_text',
         'image',
+        'score',
+        'is_correct',
+    ];
+
+    protected $casts = [
+        'score' => 'decimal:2',
+        'is_correct' => 'boolean',
     ];
 
     protected $appends = ['image_url'];
