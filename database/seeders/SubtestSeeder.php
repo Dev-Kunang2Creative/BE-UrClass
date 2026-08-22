@@ -3,6 +3,7 @@
 namespace Database\Seeders;
 
 use App\Models\Subtest;
+use App\Services\ScoringService;
 use Illuminate\Database\Seeder;
 
 class SubtestSeeder extends Seeder
@@ -29,10 +30,15 @@ class SubtestSeeder extends Seeder
         ];
 
         foreach ($items as $item) {
-            Subtest::updateOrCreate(
+            $subtest = Subtest::updateOrCreate(
                 ['name' => $item['name']],
                 ['category' => $item['category'], 'exam_type' => $item['exam_type'], 'max_questions' => $item['max_questions']]
             );
+
+            // TKP is scored per-option (1-5), not right/wrong. See ScoringService.
+            $subtest->update([
+                'scoring_scheme' => ScoringService::defaultSchemeFor($subtest),
+            ]);
         }
     }
 }

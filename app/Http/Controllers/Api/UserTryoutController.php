@@ -56,6 +56,7 @@ class UserTryoutController extends Controller
                 ]),
             ])
             ->where('is_published', true)
+            ->where('kategori', $user->kategori ?? 'utbk')
             ->withCount('userAccesses')
             ->latest()
             ->get();
@@ -658,7 +659,12 @@ class UserTryoutController extends Controller
         $wrong = $session->answers()->where('is_correct', false)->count();
         $unanswered = max($totalQuestions - $answered, 0);
         $accuracy = $totalQuestions > 0 ? ($correct / $totalQuestions) * 100 : 0;
-        $simpleFinalScore = $totalQuestions > 0 ? ($correct / $totalQuestions) * 1000 : 0;
+
+        // Skor memakai jumlah nilai jawaban, bukan jumlah jawaban benar, supaya
+        // bobot per opsi (TKP CPNS) ikut terhitung. Untuk subtes 1/0 hasilnya sama.
+        $rawPoints = ScoringService::rawScoreForSession($session);
+        $maxPoints = ScoringService::maxScoreForSession($session);
+        $simpleFinalScore = $maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0;
 
         $baseData = [
             'tryout_id' => $tryout->id,
@@ -678,7 +684,7 @@ class UserTryoutController extends Controller
             'score_result' => [
                 'method' => $tryout->use_irt ? 'irt' : 'simple',
                 'is_ready' => ! $tryout->use_irt,
-                'raw_score' => ! $tryout->use_irt ? $correct : 0,
+                'raw_score' => ! $tryout->use_irt ? round($rawPoints, 2) : 0,
                 'final_score' => ! $tryout->use_irt ? round($simpleFinalScore, 2) : 0,
                 'accuracy' => round($accuracy, 2),
             ],
@@ -858,8 +864,9 @@ class UserTryoutController extends Controller
                         ->sum(fn ($answer) => $questionWeights[$answer->question_id] ?? 0);
                     $finalScore = ($rawScore / $totalWeightAll) * 1000;
                 } else {
-                    $rawScore = $correct;
-                    $finalScore = $totalQuestions > 0 ? ($correct / $totalQuestions) * 1000 : 0;
+                    $rawScore = ScoringService::rawScoreForSession($session);
+                    $maxPoints = ScoringService::maxScoreForSession($session);
+                    $finalScore = $maxPoints > 0 ? ($rawScore / $maxPoints) * 1000 : 0;
                 }
 
                 $row = [
@@ -1083,7 +1090,9 @@ class UserTryoutController extends Controller
         $answered = $session->answers->whereNotNull('answer')->count();
         $wrong = $session->answers->where('is_correct', false)->count();
         $accuracy = $totalQuestions > 0 ? ($correct / $totalQuestions) * 100 : 0;
-        $finalScore = $totalQuestions > 0 ? ($correct / $totalQuestions) * 1000 : 0;
+        $rawPoints = ScoringService::rawScoreForSession($session);
+        $maxPoints = ScoringService::maxScoreForSession($session);
+        $finalScore = $maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0;
 
         return [
             'session_id' => $session->id,
@@ -1093,7 +1102,7 @@ class UserTryoutController extends Controller
             'started_at' => $session->started_at,
             'finished_at' => $session->finished_at,
             'score' => [
-                'raw_score' => $correct,
+                'raw_score' => round($rawPoints, 2),
                 'final_score' => round($finalScore, 2),
                 'accuracy' => round($accuracy, 2),
             ],

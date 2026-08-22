@@ -22,6 +22,7 @@ class TryoutSeeder extends Seeder
                 'start_date'   => now()->subDays(2),
                 'end_date'     => now()->addDays(14),
                 'category'     => 'UTBK',
+                'kategori'     => 'utbk',
                 'is_published' => true,
             ],
             [
@@ -30,6 +31,7 @@ class TryoutSeeder extends Seeder
                 'start_date'   => now()->addDays(7),
                 'end_date'     => now()->addDays(28),
                 'category'     => 'UTBK',
+                'kategori'     => 'utbk',
                 'is_published' => true,
             ],
             [
@@ -38,11 +40,10 @@ class TryoutSeeder extends Seeder
                 'start_date'   => now()->addDays(30),
                 'end_date'     => now()->addDays(60),
                 'category'     => 'SNBP',
+                'kategori'     => 'utbk',
                 'is_published' => false,
             ],
         ];
-
-        $subtests = Subtest::all()->keyBy('name');
 
         foreach ($tryouts as $tryoutData) {
             $tryout = Tryout::updateOrCreate(
@@ -50,14 +51,14 @@ class TryoutSeeder extends Seeder
                 array_merge($tryoutData, ['created_by' => $adminId])
             );
 
-            // Assign semua subtest ke tryout (jika belum ada)
-            $order = 1;
+            // Only subtests of the same exam track belong in this tryout.
+            $subtests = Subtest::where('exam_type', $tryoutData['kategori'])->get();
+
             foreach ($subtests as $subtest) {
                 TryoutSubtest::updateOrCreate(
                     ['tryout_id' => $tryout->id, 'subtest_id' => $subtest->id],
                     ['duration_minutes' => 30, 'is_active' => true]
                 );
-                $order++;
             }
         }
     }

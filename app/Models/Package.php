@@ -19,6 +19,7 @@ class Package extends Model
         'discount_price',
         'ticket_amount',
         'currency',
+        'kategori',
         'is_active',
         'created_by',
     ];

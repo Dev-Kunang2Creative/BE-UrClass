@@ -22,6 +22,7 @@ class Kelas extends Model
         'wa_consultation_number',
         'meet_link',
         'image',
+        'kategori',
         'is_active',
         'created_by',
     ];

@@ -18,6 +18,7 @@ class Tryout extends Model
         'start_date',
         'end_date',
         'category',
+        'kategori',
         'is_free',
         'use_irt',
         'randomize_options',

@@ -94,6 +94,49 @@ class ScoringService
     }
 
     /**
+     * Total skor mentah satu sesi: jumlah nilai jawaban, bukan jumlah jawaban benar.
+     *
+     * Untuk subtes right_wrong (1/0) hasilnya identik dengan menghitung jawaban
+     * benar. Untuk TKP (option_weight) inilah satu-satunya cara bobot 1-5
+     * terhitung.
+     */
+    public static function rawScoreForSession(TryoutSession $session): float
+    {
+        return (float) $session->answers()->sum('score');
+    }
+
+    /**
+     * Skor maksimum satu sesi: jumlah nilai tertinggi tiap soal yang diujikan.
+     * Dipakai sebagai penyebut agar skala 0-1000 tetap benar saat satu soal
+     * bernilai lebih dari 1 (TKP).
+     */
+    public static function maxScoreForSession(TryoutSession $session): float
+    {
+        $subtestIds = $session->tryout
+            ?->tryoutSubtests()
+            ->where('is_active', true)
+            ->pluck('subtest_id') ?? collect();
+
+        if ($subtestIds->isEmpty()) {
+            return 0.0;
+        }
+
+        $total = 0.0;
+
+        foreach (Subtest::whereIn('id', $subtestIds)->get() as $subtest) {
+            $questions = Question::where('subtest_id', $subtest->id)
+                ->where('is_active', true)
+                ->get();
+
+            foreach ($questions as $question) {
+                $total += self::maxScoreForQuestion($question, $subtest);
+            }
+        }
+
+        return $total;
+    }
+
+    /**
      * Skor maksimum yang mungkin dicapai untuk satu soal.
      */
     public static function maxScoreForQuestion(Question $question, Subtest $subtest): float

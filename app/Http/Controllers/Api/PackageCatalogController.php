@@ -11,6 +11,7 @@ class PackageCatalogController extends Controller
 public function index(): JsonResponse
 {
     $packages = Package::where('is_active', true)
+        ->where('kategori', request()->user()?->kategori ?? 'utbk')
         ->orderBy('price', 'asc')
         ->get();
 

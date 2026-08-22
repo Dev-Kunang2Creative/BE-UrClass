@@ -13,6 +13,7 @@ class UserKelasController extends Controller
     public function index(): JsonResponse
     {
         $kelas = Kelas::where('is_active', true)
+            ->where('kategori', request()->user()?->kategori ?? 'utbk')
             ->withCount('enrollments')
             ->latest()
             ->get();

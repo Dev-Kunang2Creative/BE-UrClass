@@ -33,6 +33,7 @@ class AdminKelasController extends Controller
 
         $validated = $request->validate([
             'name'                   => ['required', 'string', 'max:255'],
+            'kategori'               => ['nullable', 'in:utbk,cpns'],
             'description'            => ['nullable', 'string'],
             'price'                  => ['required', 'integer', 'min:0'],
             'discount_price'         => ['nullable', 'integer', 'min:1', function ($attr, $val, $fail) use ($request) {
@@ -88,6 +89,7 @@ class AdminKelasController extends Controller
 
         $validated = $request->validate([
             'name'                   => ['required', 'string', 'max:255'],
+            'kategori'               => ['nullable', 'in:utbk,cpns'],
             'description'            => ['nullable', 'string'],
             'price'                  => ['required', 'integer', 'min:0'],
             'discount_price'         => ['nullable', 'integer', 'min:1', function ($attr, $val, $fail) use ($request) {

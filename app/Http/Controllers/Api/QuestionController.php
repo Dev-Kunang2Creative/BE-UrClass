@@ -54,6 +54,7 @@ class QuestionController extends Controller
             'options.*.option_key' => ['required', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'options.*.option_text' => ['nullable', 'string'],
             'options.*.image' => ['nullable', 'image', 'max:2048'],
+            'options.*.score' => ['nullable', 'numeric', 'min:0', 'max:100'],
         ]);
 
         $validated['question_type'] = $validated['question_type'] ?? 'multiple_choice';
@@ -102,11 +103,17 @@ class QuestionController extends Controller
                     $optImage = $request->file("options.{$index}.image")->store('option-images', 'public');
                 }
 
+                $isCorrect = isset($validated['correct_answer'])
+                    && strcasecmp(trim($option['option_key']), trim((string) $validated['correct_answer'])) === 0;
+
                 QuestionOption::create([
                     'question_id' => $question->id,
                     'option_key' => $option['option_key'],
                     'option_text' => RichTextSanitizer::sanitize($option['option_text'] ?? null),
                     'image' => $optImage,
+                    // Per-option weight (TKP). Falls back to right/wrong credit.
+                    'score' => $option['score'] ?? ($isCorrect ? 1 : 0),
+                    'is_correct' => $isCorrect,
                 ]);
             }
 
@@ -152,6 +159,7 @@ class QuestionController extends Controller
             'options.*.option_key' => ['required', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'options.*.option_text' => ['nullable', 'string'],
             'options.*.image' => ['nullable', 'image', 'max:2048'],
+            'options.*.score' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'delete_question_image' => ['nullable', 'boolean'],
             'delete_discussion_image' => ['nullable', 'boolean'],
         ]);
@@ -223,11 +231,17 @@ class QuestionController extends Controller
                     $optImage = $request->file("options.{$index}.image")->store('option-images', 'public');
                 }
 
+                $isCorrect = isset($validated['correct_answer'])
+                    && strcasecmp(trim($optKey), trim((string) $validated['correct_answer'])) === 0;
+
                 QuestionOption::create([
                     'question_id' => $question->id,
                     'option_key' => $optKey,
                     'option_text' => RichTextSanitizer::sanitize($option['option_text'] ?? null),
                     'image' => $optImage,
+                    // Per-option weight (TKP). Falls back to right/wrong credit.
+                    'score' => $option['score'] ?? ($isCorrect ? 1 : 0),
+                    'is_correct' => $isCorrect,
                 ]);
             }
 

@@ -15,6 +15,8 @@ class DatabaseSeeder extends Seeder
             TryoutSeeder::class,
             QuestionSeeder::class,
             PackageSeeder::class,
+            CpnsContentSeeder::class,
+            CpnsQuestionSeeder::class,
         ]);
     }
 }

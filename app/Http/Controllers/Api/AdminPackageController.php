@@ -25,6 +25,7 @@ class AdminPackageController extends Controller
     {
         $validated = $request->validate([
             'name'           => ['required', 'string', 'max:255'],
+            'kategori'       => ['nullable', 'in:utbk,cpns'],
             'slug'           => ['nullable', 'string', 'max:255', 'unique:packages,slug'],
             'description'    => ['nullable', 'string'],
             'thumbnail'      => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
@@ -70,6 +71,7 @@ class AdminPackageController extends Controller
     {
         $validated = $request->validate([
             'name'           => ['required', 'string', 'max:255'],
+            'kategori'       => ['nullable', 'in:utbk,cpns'],
             'slug'           => ['nullable', 'string', 'max:255', 'unique:packages,slug,' . $package->id],
             'description'    => ['nullable', 'string'],
             'thumbnail'      => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
