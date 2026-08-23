@@ -92,8 +92,15 @@ Route::middleware('auth:sanctum')->group(function () {
 | Admin Routes
 |--------------------------------------------------------------------------
 */
+// ->name('admin.') is required, not cosmetic: prefix() changes the URI but
+// not the route name, so the admin apiResources below generated the same
+// names as the public ones (packages.index, orders.show). Laravel tolerates
+// duplicate names until `route:cache`, which refuses to serialize them - and
+// until then route('packages.index') silently resolved to whichever was
+// registered last.
 Route::middleware(['auth:sanctum', 'admin'])
     ->prefix('admin')
+    ->name('admin.')
     ->group(function () {
 
         Route::get('/stats', [AdminStatsController::class, 'index']);
