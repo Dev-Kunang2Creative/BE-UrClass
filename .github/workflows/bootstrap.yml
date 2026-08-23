@@ -85,13 +85,35 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          touch ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
+
+          # Fail with a readable message instead of a cryptic ssh error if the
+          # runner cannot even open the port.
+          echo "--- tcp reachability"
+          if timeout 20 bash -c "cat < /dev/null > /dev/tcp/$SSH_HOST/$SSH_PORT" 2>/dev/null; then
+            echo "port is open from this runner"
+          else
+            echo "::error::cannot open $SSH_HOST:$SSH_PORT from this runner - \
+          check the SSH_HOST/SSH_PORT secrets and whether the host firewall \
+          allows GitHub Actions egress."
+            exit 1
+          fi
+
           if [ -n "$SSH_KNOWN_HOSTS" ]; then
             printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            echo "host key pinned from SSH_KNOWN_HOSTS"
+            echo 'SSH_OPTS=-o StrictHostKeyChecking=yes' >> "$GITHUB_ENV"
           else
-            echo "::warning::SSH_KNOWN_HOSTS not set - trusting host key on first use."
-            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+            echo "::warning::SSH_KNOWN_HOSTS not set - trusting the host key on first use."
+            # Best effort only. ssh-keyscan exiting non-zero must not kill the
+            # step (the shell runs with -e), and its stderr is kept visible.
+            if ssh-keyscan -T 15 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts; then
+              echo "host key collected: $(wc -l < ~/.ssh/known_hosts) entries"
+            else
+              echo "ssh-keyscan failed (exit $?) - falling back to accept-new"
+            fi
+            echo 'SSH_OPTS=-o StrictHostKeyChecking=accept-new' >> "$GITHUB_ENV"
           fi
-          chmod 600 ~/.ssh/known_hosts
 
       - name: Provision directories
         id: provision
@@ -102,7 +124,7 @@ jobs:
         run: |
           # `bash -s` reads the script from stdin, so stdin cannot also carry
           # data. The .env body is shipped with scp in the next step instead.
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
             "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE' > provision.log 2>&1 || { cat provision.log; exit 1; }
           set -euo pipefail
           mkdir -p "$DEPLOY_PATH"
@@ -135,10 +157,10 @@ jobs:
           # (a process list on shared hosting would otherwise expose it).
           umask 077
           printf '%s\n' "$PROD_ENV" > prod.env
-          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" -q \
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" $SSH_OPTS -q \
             prod.env "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/.env"
           rm -f prod.env
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
             "chmod 600 '$DEPLOY_PATH/.env' && wc -l < '$DEPLOY_PATH/.env'"
           echo ".env uploaded"
 
@@ -149,7 +171,7 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
         run: |
           rsync -rlptz --delete --human-readable --stats \
-            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT" \
+            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT $SSH_OPTS" \
             --exclude-from=.deployignore \
             ./ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
 
@@ -160,7 +182,7 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           RUN_MIGRATIONS: ${{ inputs.run_migrations }}
         run: |
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
             "DEPLOY_PATH='$DEPLOY_PATH' RUN_MIGRATIONS='$RUN_MIGRATIONS' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$DEPLOY_PATH"

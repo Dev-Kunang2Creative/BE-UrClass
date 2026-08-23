@@ -88,14 +88,31 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          touch ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
+
+          echo "--- tcp reachability"
+          if timeout 20 bash -c "cat < /dev/null > /dev/tcp/$SSH_HOST/$SSH_PORT" 2>/dev/null; then
+            echo "port is open from this runner"
+          else
+            echo "::error::cannot open $SSH_HOST:$SSH_PORT from this runner."
+            exit 1
+          fi
+
           if [ -n "$SSH_KNOWN_HOSTS" ]; then
             # Pinned host key (preferred).
             printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            echo 'SSH_OPTS=-o StrictHostKeyChecking=yes' >> "$GITHUB_ENV"
           else
             echo "::warning::SSH_KNOWN_HOSTS not set - trusting host key on first use (TOFU)."
-            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+            # Best effort: the shell runs with -e, so a failing keyscan must not
+            # abort the step, and its stderr stays visible for diagnosis.
+            if ssh-keyscan -T 15 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts; then
+              echo "host key collected: $(wc -l < ~/.ssh/known_hosts) entries"
+            else
+              echo "ssh-keyscan failed (exit $?) - falling back to accept-new"
+            fi
+            echo 'SSH_OPTS=-o StrictHostKeyChecking=accept-new' >> "$GITHUB_ENV"
           fi
-          chmod 600 ~/.ssh/known_hosts
 
       - name: Preflight checks on server
         env:
@@ -103,7 +120,7 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_USER: ${{ secrets.SSH_USER }}
         run: |
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
             "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
           set -euo pipefail
           fail=0
@@ -130,7 +147,7 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
         run: |
           rsync -rlptz --delete --human-readable --stats \
-            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT" \
+            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT $SSH_OPTS" \
             --exclude-from=.deployignore \
             ./ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
 
@@ -140,7 +157,7 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_USER: ${{ secrets.SSH_USER }}
         run: |
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
             "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$DEPLOY_PATH"
@@ -173,7 +190,7 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_USER: ${{ secrets.SSH_USER }}
         run: |
-          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
             "printf '%s\n' '${{ github.sha }}' > '$DEPLOY_PATH/.deployed-sha'"
 
       - name: Health check
