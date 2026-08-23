@@ -196,7 +196,16 @@ jobs:
           [ -n "$php_bin" ] || { echo "no PHP >= 8.2 CLI found"; exit 1; }
           echo "php cli: $php_bin ($("$php_bin" -r 'echo PHP_VERSION;'))"
 
-          "$php_bin" artisan optimize:clear
+          # NOT optimize:clear - that also runs cache:clear, which with
+          # CACHE_STORE=database issues `delete from cache`. On a fresh
+          # database that table does not exist yet, so it must not run
+          # before migrate. These clears are all file-based.
+          echo "--- clear file caches"
+          "$php_bin" artisan config:clear
+          "$php_bin" artisan route:clear
+          "$php_bin" artisan view:clear
+          "$php_bin" artisan event:clear
+          "$php_bin" artisan clear-compiled
 
           if [ "$RUN_MIGRATIONS" = "true" ]; then
             echo "--- migrate"
@@ -204,6 +213,9 @@ jobs:
           else
             echo "--- migrations skipped by input"
           fi
+
+          # Safe only once the schema exists; still tolerated if it is not.
+          "$php_bin" artisan cache:clear || echo "cache:clear skipped (no schema yet)"
 
           [ -e public/storage ] || "$php_bin" artisan storage:link
 

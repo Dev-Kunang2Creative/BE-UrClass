@@ -174,7 +174,17 @@ jobs:
             "$php_bin" artisan storage:link || true
           fi
 
-          "$php_bin" artisan optimize:clear
+          # Granular clears instead of optimize:clear: that command also runs
+          # cache:clear, which with CACHE_STORE=database hits the `cache`
+          # table - a DB hiccup there should not fail an otherwise fine
+          # code deploy.
+          "$php_bin" artisan config:clear
+          "$php_bin" artisan route:clear
+          "$php_bin" artisan view:clear
+          "$php_bin" artisan event:clear
+          "$php_bin" artisan clear-compiled
+          "$php_bin" artisan cache:clear || echo "cache:clear skipped"
+
           "$php_bin" artisan config:cache
           "$php_bin" artisan route:cache
           "$php_bin" artisan view:cache
