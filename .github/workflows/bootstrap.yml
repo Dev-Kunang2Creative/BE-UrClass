@@ -217,7 +217,17 @@ jobs:
           # Safe only once the schema exists; still tolerated if it is not.
           "$php_bin" artisan cache:clear || echo "cache:clear skipped (no schema yet)"
 
-          [ -e public/storage ] || "$php_bin" artisan storage:link
+          # NOT `artisan storage:link`. This host disables both symlink() and
+          # exec() in PHP, so Laravel's Filesystem::link() dies with
+          # "Call to undefined function exec()". The shell has ln, so link it
+          # directly. This matters: the app serves every upload through
+          # Storage::disk('public')->url(), which resolves to public/storage.
+          if [ -e public/storage ]; then
+            echo "public/storage already present"
+          else
+            ln -s ../storage/app/public public/storage
+            echo "public/storage -> $(readlink public/storage)"
+          fi
 
           "$php_bin" artisan config:cache
           "$php_bin" artisan route:cache

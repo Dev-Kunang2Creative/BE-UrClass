@@ -169,9 +169,12 @@ jobs:
             if [ "${v:-0}" -ge 80200 ]; then php_bin="$c"; break; fi
           done
 
-          # public/storage symlink is excluded from rsync; create it if absent.
+          # public/storage is excluded from rsync; recreate it if it is gone.
+          # Not via `artisan storage:link` - this host disables symlink() and
+          # exec() in PHP, so Laravel cannot create the link itself.
           if [ ! -e public/storage ]; then
-            "$php_bin" artisan storage:link || true
+            ln -s ../storage/app/public public/storage
+            echo "public/storage -> $(readlink public/storage)"
           fi
 
           # Granular clears instead of optimize:clear: that command also runs
