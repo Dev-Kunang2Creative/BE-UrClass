@@ -1,0 +1,192 @@
+name: Deploy prod-api.urclass.id
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Never let two deploys rsync into the same directory at once.
+concurrency:
+  group: deploy-prod-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    env:
+      # DEPLOY_PATH is derived from the SSH_USER secret in the step below -
+      # this repo is public, so the hosting username stays out of it.
+      HEALTH_URL: https://prod-api.urclass.id/up
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve deploy path
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          test -n "$SSH_USER" || { echo "::error::secret SSH_USER is not set"; exit 1; }
+          echo "DEPLOY_PATH=/home/$SSH_USER/domains/prod-api.urclass.id/public_html" >> "$GITHUB_ENV"
+
+      - name: Setup PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, bcmath, gd, zip, intl, pdo_mysql, curl, dom, fileinfo, exif, xml
+          coverage: none
+          tools: composer:v2
+
+      - name: Get composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache composer packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: composer-
+
+      - name: Install PHP dependencies (production)
+        run: |
+          # Placeholder .env so `artisan package:discover` can boot during
+          # composer's post-autoload-dump. It is excluded from rsync, so the
+          # real server .env is never overwritten.
+          cp .env.example .env
+          composer install \
+            --no-dev \
+            --optimize-autoloader \
+            --classmap-authoritative \
+            --prefer-dist \
+            --no-interaction \
+            --no-progress
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Build frontend assets
+        # routes/web.php renders welcome.blade.php which uses @vite,
+        # so public/build must exist or "/" throws a manifest error.
+        run: |
+          npm ci
+          npm run build
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            # Pinned host key (preferred).
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::SSH_KNOWN_HOSTS not set - trusting host key on first use (TOFU)."
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Preflight checks on server
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          fail=0
+          command -v rsync >/dev/null || { echo "MISSING: rsync on server"; fail=1; }
+          [ -d "$DEPLOY_PATH" ] || { echo "MISSING: $DEPLOY_PATH"; fail=1; }
+          [ -f "$DEPLOY_PATH/.env" ] || { echo "MISSING: $DEPLOY_PATH/.env (run the one-time bootstrap first)"; fail=1; }
+          [ -d "$DEPLOY_PATH/storage/framework/views" ] || { echo "MISSING: storage/framework/views"; fail=1; }
+          php_bin=""
+          for c in /opt/alt/php83/usr/bin/php /opt/alt/php84/usr/bin/php \
+                   /usr/bin/php8.3 /usr/bin/php8.2 /usr/local/bin/php /usr/bin/php; do
+            [ -x "$c" ] || continue
+            v=$("$c" -r 'echo PHP_VERSION_ID;' 2>/dev/null || echo 0)
+            if [ "${v:-0}" -ge 80200 ]; then php_bin="$c"; break; fi
+          done
+          [ -n "$php_bin" ] || { echo "MISSING: no PHP >= 8.2 CLI found"; fail=1; }
+          echo "php cli: ${php_bin:-none} ($("${php_bin:-echo}" -r 'echo PHP_VERSION;' 2>/dev/null || echo n/a))"
+          exit $fail
+          REMOTE
+
+      - name: Deploy files (rsync)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          rsync -rlptz --delete --human-readable --stats \
+            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT" \
+            --exclude-from=.deployignore \
+            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
+
+      - name: Post-deploy (rebuild caches)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          php_bin=""
+          for c in /opt/alt/php83/usr/bin/php /opt/alt/php84/usr/bin/php \
+                   /usr/bin/php8.3 /usr/bin/php8.2 /usr/local/bin/php /usr/bin/php; do
+            [ -x "$c" ] || continue
+            v=$("$c" -r 'echo PHP_VERSION_ID;' 2>/dev/null || echo 0)
+            if [ "${v:-0}" -ge 80200 ]; then php_bin="$c"; break; fi
+          done
+
+          # public/storage symlink is excluded from rsync; create it if absent.
+          if [ ! -e public/storage ]; then
+            "$php_bin" artisan storage:link || true
+          fi
+
+          "$php_bin" artisan optimize:clear
+          "$php_bin" artisan config:cache
+          "$php_bin" artisan route:cache
+          "$php_bin" artisan view:cache
+          "$php_bin" artisan event:cache
+
+          # NOTE: no `artisan migrate` here by design - schema changes stay manual.
+          echo "--- deployed commit: $(cat .deployed-sha 2>/dev/null || echo unknown)"
+          REMOTE
+
+      - name: Record deployed commit
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "printf '%s\n' '${{ github.sha }}' > '$DEPLOY_PATH/.deployed-sha'"
+
+      - name: Health check
+        run: |
+          for i in 1 2 3 4 5; do
+            code=$(curl -fsS -o /dev/null -w '%{http_code}' "$HEALTH_URL" || echo 000)
+            echo "attempt $i: HTTP $code"
+            [ "$code" = "200" ] && exit 0
+            sleep 6
+          done
+          echo "::error::Health check failed at $HEALTH_URL"
+          exit 1
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

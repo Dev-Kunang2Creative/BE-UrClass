@@ -1,0 +1,219 @@
+name: Bootstrap + first deploy (one-time)
+
+# Run this ONCE, manually, from the Actions tab.
+#
+# Prerequisite (one command on the server, see DEPLOY.md): the CI deploy
+# public key must be in ~/.ssh/authorized_keys. Everything after that is
+# automated here: directories, .env, app files, migrations, caches, and a
+# verification pass against the live URL.
+#
+# After this succeeds, deploy.yml takes over every push to main and never
+# touches the database again.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_migrations:
+        description: 'Run migrations (required once - the API 500s without the sessions/cache/jobs tables)'
+        type: boolean
+        default: true
+
+concurrency:
+  group: deploy-prod-api
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Provision, deploy, verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      BASE_URL: https://prod-api.urclass.id
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check required secrets
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          PROD_ENV: ${{ secrets.PROD_ENV }}
+        run: |
+          miss=0
+          for v in SSH_HOST SSH_PORT SSH_USER SSH_PRIVATE_KEY PROD_ENV; do
+            if [ -z "${!v}" ]; then echo "::error::secret $v is not set"; miss=1; fi
+          done
+          [ "$miss" = 0 ] || exit 1
+          echo "DEPLOY_PATH=/home/$SSH_USER/domains/prod-api.urclass.id/public_html" >> "$GITHUB_ENV"
+
+      - name: Setup PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, bcmath, gd, zip, intl, pdo_mysql, curl, dom, fileinfo, exif, xml
+          coverage: none
+          tools: composer:v2
+
+      - name: Install PHP dependencies (production)
+        run: |
+          cp .env.example .env
+          composer install --no-dev --optimize-autoloader --classmap-authoritative \
+                           --prefer-dist --no-interaction --no-progress
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Build frontend assets
+        run: |
+          npm ci
+          npm run build
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::SSH_KNOWN_HOSTS not set - trusting host key on first use."
+            ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Provision directories
+        id: provision
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          # `bash -s` reads the script from stdin, so stdin cannot also carry
+          # data. The .env body is shipped with scp in the next step instead.
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE' > provision.log 2>&1 || { cat provision.log; exit 1; }
+          set -euo pipefail
+          mkdir -p "$DEPLOY_PATH"
+          cd "$DEPLOY_PATH"
+          mkdir -p storage/framework/cache/data storage/framework/sessions \
+                   storage/framework/views storage/framework/testing \
+                   storage/logs storage/app/public storage/app/private \
+                   bootstrap/cache
+          chmod -R 775 storage bootstrap/cache
+          if [ -s .env ]; then echo "ENV_PRESENT"; else echo "ENV_MISSING"; fi
+          echo "provision OK"
+          REMOTE
+          cat provision.log
+          if grep -q ENV_MISSING provision.log; then
+            echo "env_missing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "env_missing=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::.env already exists on the server - left untouched."
+          fi
+
+      - name: Upload .env (first time only)
+        if: steps.provision.outputs.env_missing == 'true'
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          PROD_ENV: ${{ secrets.PROD_ENV }}
+        run: |
+          # Written to a file and scp'd so the secret never appears in argv
+          # (a process list on shared hosting would otherwise expose it).
+          umask 077
+          printf '%s\n' "$PROD_ENV" > prod.env
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" -q \
+            prod.env "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/.env"
+          rm -f prod.env
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "chmod 600 '$DEPLOY_PATH/.env' && wc -l < '$DEPLOY_PATH/.env'"
+          echo ".env uploaded"
+
+      - name: Deploy files (rsync)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          rsync -rlptz --delete --human-readable --stats \
+            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT" \
+            --exclude-from=.deployignore \
+            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
+
+      - name: Migrate, link storage, build caches
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          RUN_MIGRATIONS: ${{ inputs.run_migrations }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' RUN_MIGRATIONS='$RUN_MIGRATIONS' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          php_bin=""
+          for c in /opt/alt/php83/usr/bin/php /opt/alt/php84/usr/bin/php \
+                   /usr/bin/php8.3 /usr/bin/php8.2 /usr/local/bin/php /usr/bin/php; do
+            [ -x "$c" ] || continue
+            v=$("$c" -r 'echo PHP_VERSION_ID;' 2>/dev/null || echo 0)
+            if [ "${v:-0}" -ge 80200 ]; then php_bin="$c"; break; fi
+          done
+          [ -n "$php_bin" ] || { echo "no PHP >= 8.2 CLI found"; exit 1; }
+          echo "php cli: $php_bin ($("$php_bin" -r 'echo PHP_VERSION;'))"
+
+          "$php_bin" artisan optimize:clear
+
+          if [ "$RUN_MIGRATIONS" = "true" ]; then
+            echo "--- migrate"
+            "$php_bin" artisan migrate --force
+          else
+            echo "--- migrations skipped by input"
+          fi
+
+          [ -e public/storage ] || "$php_bin" artisan storage:link
+
+          "$php_bin" artisan config:cache
+          "$php_bin" artisan route:cache
+          "$php_bin" artisan view:cache
+          "$php_bin" artisan event:cache
+          echo "post-deploy OK"
+          REMOTE
+
+      - name: Verify the API is reachable
+        run: |
+          fail=0
+          probe() { # label, path, expected status
+            code=$(curl -s -o /tmp/body -w '%{http_code}' "$BASE_URL$2")
+            if [ "$code" = "$3" ]; then
+              echo "  PASS  $1  ($2 -> $code)"
+            else
+              echo "  FAIL  $1  ($2 -> $code, expected $3)"
+              head -c 400 /tmp/body; echo
+              fail=1
+            fi
+          }
+          echo "===== verification ====="
+          probe "health endpoint (php + laravel boot + rewrite chain)" "/up"                   200
+          probe "web route (database sessions + vite assets)"          "/"                     200
+          probe "api routing + sanctum guard"                          "/api/auth/me"          401
+          probe "secrets not web-readable"                             "/.env"                 403
+          probe "app dirs not web-readable"                            "/vendor/autoload.php"  403
+          [ "$fail" = 0 ] || { echo "::error::verification failed"; exit 1; }
+          echo "===== API is live ====="
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

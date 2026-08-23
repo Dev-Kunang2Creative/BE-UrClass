@@ -1,0 +1,29 @@
+# rsync --exclude-from patterns for production deploys.
+# A leading "/" anchors the pattern to the transfer root.
+# NOTE: excluded paths are also protected from --delete, which is exactly
+# why .env and storage/ survive every deploy.
+
+# --- never ship VCS / CI metadata ---
+/.git
+/.github
+/.gitignore
+/.gitattributes
+/.editorconfig
+
+# --- server owns these, CI must never overwrite them ---
+/.env
+/.env.*
+/.deployed-sha
+/storage/
+/public/storage
+/bootstrap/cache/*
+
+# --- build inputs that are not needed at runtime ---
+/node_modules
+/tests/
+/phpunit.xml
+/vite.config.js
+/package.json
+/package-lock.json
+/.deployignore
+/README.md

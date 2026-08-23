@@ -1,4 +1,31 @@
+# The whole Laravel app lives in this directory (public_html), but only
+# public/ may be served. Everything below is defense in depth for that.
+
+Options -Indexes
+
+# Block dotfiles (.env, .env.backup, .gitignore, ...) even if mod_rewrite
+# is unavailable. ACME tokens are not dotfiles, so AutoSSL still works.
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+
+# Block project metadata that has no business being served.
+<FilesMatch "(?i)^(composer\.(json|lock)|artisan|phpunit\.xml|.*\.md)$">
+    Require all denied
+</FilesMatch>
+
 <IfModule mod_rewrite.c>
-  RewriteEngine On
-  RewriteRule ^(.*)$ public/$1 [L]
+    RewriteEngine On
+
+    # Let Hostinger AutoSSL answer ACME challenges from the real docroot.
+    RewriteRule ^\.well-known/ - [L]
+
+    # Application directories are never web-reachable.
+    # NOTE: "storage" is deliberately absent - /storage/* must keep working
+    # because `artisan storage:link` exposes uploads at public/storage.
+    RewriteRule ^(app|bootstrap|config|database|resources|routes|tests|vendor)(/|$) - [F,L]
+
+    # Serve everything else out of public/. The negative lookahead stops the
+    # per-directory rewrite from looping (public/x -> public/public/x).
+    RewriteRule ^(?!public/)(.*)$ public/$1 [L]
 </IfModule>
