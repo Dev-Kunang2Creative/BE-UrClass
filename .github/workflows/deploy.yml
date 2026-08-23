@@ -236,6 +236,38 @@ jobs:
             -d 'email=deploy-probe@example.invalid' -d 'password=wrong' "$BASE_URL/api/auth/login"
           probe "/.env             secrets not web-readable"           403 "$BASE_URL/.env"
           probe "/vendor/...       app dirs not web-readable"          403 "$BASE_URL/vendor/autoload.php"
+
+          # Turnstile must actually reject a forged token. With
+          # CLOUDFLARE_TURNSTILE_SECRET_KEY absent from the server .env,
+          # config/services.php falls back to Cloudflare's test secret
+          # (1x0000...AA) which passes anything - the captcha would be
+          # decorative and register would be open to mass signup.
+          #
+          # A fixed probe address bounds the damage: if the hole were open the
+          # first run would create that one user, and later runs would fail the
+          # unique-email rule instead. So the body must actually name Turnstile;
+          # a bare 422 is not proof.
+          echo "--- captcha rejects a forged token"
+          code=$(curl -s -o /tmp/ts -w '%{http_code}' -X POST \
+            -H 'Accept: application/json' \
+            -d 'name=Deploy Probe' \
+            -d 'email=turnstile-probe@urclass.invalid' \
+            -d 'password=probe-only-123' \
+            -d 'password_confirmation=probe-only-123' \
+            -d 'cf_turnstile_response=forged-token-should-be-rejected' \
+            "$BASE_URL/api/auth/register")
+          if [ "$code" = "422" ] && grep -qi 'turnstile' /tmp/ts; then
+            echo "  PASS  forged captcha token rejected -> 422"
+          elif [ "$code" = "201" ]; then
+            echo "  FAIL  forged captcha token ACCEPTED -> 201 and a user was created."
+            echo "        Either the server .env has no CLOUDFLARE_TURNSTILE_SECRET_KEY,"
+            echo "        or config:cache still holds the old value."
+            fail=1
+          else
+            echo "  FAIL  unexpected response -> $code (expected 422 naming Turnstile)"
+            head -c 300 /tmp/ts; echo
+            fail=1
+          fi
           [ "$fail" = 0 ] || { echo "::error::deploy verification failed"; exit 1; }
           echo "===== deploy verified ====="
 
