@@ -45,6 +45,41 @@ class User extends Authenticatable
         ];
     }
 
+    public function setNameAttribute($value): void
+    {
+        $this->attributes['name'] = $value !== null ? strip_tags(trim($value)) : $value;
+    }
+
+    public function setSchoolOriginAttribute($value): void
+    {
+        $this->attributes['school_origin'] = $value !== null ? strip_tags(trim($value)) : $value;
+    }
+
+    public function setGradeLevelAttribute($value): void
+    {
+        $this->attributes['grade_level'] = $value !== null ? strip_tags(trim($value)) : $value;
+    }
+
+    public function setTargetUniversity1Attribute($value): void
+    {
+        $this->attributes['target_university_1'] = $value !== null ? strip_tags(trim($value)) : $value;
+    }
+
+    public function setTargetMajor1Attribute($value): void
+    {
+        $this->attributes['target_major_1'] = $value !== null ? strip_tags(trim($value)) : $value;
+    }
+
+    public function setTargetUniversity2Attribute($value): void
+    {
+        $this->attributes['target_university_2'] = $value !== null ? strip_tags(trim($value)) : $value;
+    }
+
+    public function setTargetMajor2Attribute($value): void
+    {
+        $this->attributes['target_major_2'] = $value !== null ? strip_tags(trim($value)) : $value;
+    }
+
     public function createdTryouts()
     {
         return $this->hasMany(Tryout::class, 'created_by');

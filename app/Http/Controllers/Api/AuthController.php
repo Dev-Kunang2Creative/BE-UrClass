@@ -16,14 +16,23 @@ class AuthController extends Controller
     public function register(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
+            'name' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:6', 'confirmed'],
+        ], [
+            'name.regex' => 'Nama tidak boleh mengandung tag HTML atau karakter script.',
         ]);
 
+        $turnstileToken = $request->input('cf_turnstile_response') ?? $request->input('cf-turnstile-response');
+        if (! \App\Services\TurnstileService::verify($turnstileToken, $request->ip())) {
+            throw ValidationException::withMessages([
+                'cf_turnstile_response' => ['Verifikasi keamanan Turnstile gagal atau telah kedaluwarsa. Silakan coba lagi.'],
+            ]);
+        }
+
         $user = User::create([
-            'name' => $validated['name'],
-            'email' => $validated['email'],
+            'name' => strip_tags(trim($validated['name'])),
+            'email' => strtolower(trim($validated['email'])),
             'password' => bcrypt($validated['password']),
             'role' => 'user',
         ]);

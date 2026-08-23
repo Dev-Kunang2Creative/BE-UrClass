@@ -36,8 +36,8 @@ use Illuminate\Support\Facades\Route;
 Route::post('/midtrans/callback', [PaymentCallbackController::class, 'handle']);
 
 Route::prefix('auth')->controller(AuthController::class)->group(function () {
-    Route::post('/register', 'register');
-    Route::post('/login', 'login');
+    Route::post('/register', 'register')->middleware('throttle:5,1');
+    Route::post('/login', 'login')->middleware('throttle:5,1');
     Route::get('/google/redirect', 'redirectToGoogle');
     Route::get('/google/callback', 'handleGoogleCallback');
 
@@ -53,8 +53,8 @@ Route::prefix('auth')->controller(AuthController::class)->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::middleware('auth:sanctum')->group(function () {
-    Route::put('/profile/update', [ProfileController::class, 'update']);
-    Route::put('/profile/kategori', [ProfileController::class, 'updateKategori']);
+    Route::put('/profile/update', [ProfileController::class, 'update'])->middleware('throttle:15,1');
+    Route::put('/profile/kategori', [ProfileController::class, 'updateKategori'])->middleware('throttle:15,1');
     Route::post('/access-codes/redeem', [AccessCodeController::class, 'redeem']);
     Route::get('/ticket-logs', [TicketLogController::class, 'index']);
     Route::get('/subtests', [SubtestController::class, 'index']);

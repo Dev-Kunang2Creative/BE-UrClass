@@ -39,7 +39,7 @@ class TryoutController extends Controller
             'image' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'start_date' => ['nullable', 'date'],
             'end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
-            'category' => ['nullable', 'string', Rule::in(['UTBK', 'UM'])],
+            'category' => ['nullable', 'string', Rule::in(['UTBK', 'UM', 'SNBP', 'SKD', 'SKB', 'Kedinasan'])],
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
             'is_free' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
@@ -56,7 +56,8 @@ class TryoutController extends Controller
         }
 
         $validated['created_by'] = $request->user()->id;
-        $validated['category'] = $validated['category'] ?? 'UTBK';
+        $kategori = $validated['kategori'] ?? 'utbk';
+        $validated['category'] = $validated['category'] ?? ($kategori === 'cpns' ? 'SKD' : 'UTBK');
         $validated['is_free'] = $validated['is_free'] ?? false;
         $validated['use_irt'] = $validated['use_irt'] ?? true;
         $validated['randomize_options'] = $validated['randomize_options'] ?? false;
@@ -157,7 +158,7 @@ class TryoutController extends Controller
             'image' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'start_date' => ['nullable', 'date'],
             'end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
-            'category' => ['nullable', 'string', Rule::in(['UTBK', 'UM'])],
+            'category' => ['nullable', 'string', Rule::in(['UTBK', 'UM', 'SNBP', 'SKD', 'SKB', 'Kedinasan'])],
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
             'is_free' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
@@ -180,7 +181,8 @@ class TryoutController extends Controller
         $validated['use_irt'] = $validated['use_irt'] ?? $tryout->use_irt;
         $validated['randomize_options'] = $validated['randomize_options'] ?? $tryout->randomize_options;
         $validated['is_published'] = $validated['is_published'] ?? $tryout->is_published;
-        $validated['category'] = $validated['category'] ?? $tryout->category ?? 'UTBK';
+        $kategori = $validated['kategori'] ?? $tryout->kategori ?? 'utbk';
+        $validated['category'] = $validated['category'] ?? $tryout->category ?? ($kategori === 'cpns' ? 'SKD' : 'UTBK');
 
         $tryout->update($validated);
         AuditLogger::log('Tryout', 'update', "Tryout diupdate: \"{$tryout->title}\"", $request->user(), $tryout);
@@ -320,7 +322,7 @@ class TryoutController extends Controller
             'margin_bottom' => 15,
             'margin_left' => 15,
             'margin_right' => 15,
-            'watermark_image_path' => public_path('images/logo/amunisiptn-blue.png'),
+            'watermark_image_path' => public_path('images/logo/urclass.png'),
             'watermark_image_alpha' => 0.08,
             'watermark_image_size' => 'D',
             'show_watermark_image' => true,
