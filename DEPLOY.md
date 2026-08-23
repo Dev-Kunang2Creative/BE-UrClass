@@ -125,17 +125,31 @@ cd <DEPLOY_PATH> && php artisan migrate --force
 Kalau kode baru butuh kolom yang belum ada, deploy tetap sukses tapi
 endpoint-nya error — jadi jangan lupa langkah ini.
 
-### Cron (scheduler + queue)
+### Cron (scheduler + queue) - belum diperlukan
 
-Shared hosting tidak bisa daemon, jadi queue worker dijalankan per menit.
-Tambahkan lewat hPanel -> Advanced -> Cron Jobs:
+`QUEUE_CONNECTION=database`, tapi saat ini **tidak ada** yang mengisi queue:
+tidak ada `app/Jobs`, tidak ada class `ShouldQueue`, tidak ada
+`Schedule::` di `routes/console.php`. Jadi cron worker sekarang cuma akan
+memutar loop kosong tiap menit.
+
+Tambahkan ini **hanya kalau** nanti kamu mulai `dispatch()` job, mengirim
+queued notification, atau mendaftarkan scheduled task. hPanel -> Advanced
+-> Cron Jobs:
 
 ```
 * * * * * cd <DEPLOY_PATH> && php artisan schedule:run >> /dev/null 2>&1
 * * * * * cd <DEPLOY_PATH> && php artisan queue:work --stop-when-empty --tries=3 --timeout=60 >> /dev/null 2>&1
 ```
 
-Jalankan setelah migrasi, karena `queue:work` butuh tabel `jobs`.
+Pakai path PHP absolut kalau `php` di cron bukan 8.3:
+`/opt/alt/php83/usr/bin/php` (itu yang dipakai deploy).
+
+### Batasan platform yang perlu diingat
+
+Host ini mematikan `symlink()` dan `exec()` di PHP lewat `disable_functions`.
+Akibatnya `php artisan storage:link` **selalu gagal** di sini - deploy
+membuat `public/storage` dengan `ln -s` dari shell. Kalau symlink itu hilang,
+semua upload (gambar soal, thumbnail, bukti bayar) akan 404.
 
 ### Rollback
 
