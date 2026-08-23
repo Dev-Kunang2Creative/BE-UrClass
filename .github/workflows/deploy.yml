@@ -19,7 +19,7 @@ jobs:
     env:
       # DEPLOY_PATH is derived from the SSH_USER secret in the step below -
       # this repo is public, so the hosting username stays out of it.
-      HEALTH_URL: https://prod-api.urclass.id/up
+      BASE_URL: https://prod-api.urclass.id
 
     steps:
       - name: Checkout
@@ -206,16 +206,38 @@ jobs:
           ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
             "printf '%s\n' '${{ github.sha }}' > '$DEPLOY_PATH/.deployed-sha'"
 
-      - name: Health check
+      - name: Verify the deploy
+        # /up alone is not enough: in Laravel 12 the health route carries no
+        # middleware, so it answers 200 even with a dead database. "/" and the
+        # login probe are what actually exercise MySQL.
         run: |
-          for i in 1 2 3 4 5; do
-            code=$(curl -fsS -o /dev/null -w '%{http_code}' "$HEALTH_URL" || echo 000)
-            echo "attempt $i: HTTP $code"
-            [ "$code" = "200" ] && exit 0
-            sleep 6
-          done
-          echo "::error::Health check failed at $HEALTH_URL"
-          exit 1
+          fail=0
+          JSON='-H Accept:application/json'
+          probe() { # label, expected status, curl args...
+            label="$1"; want="$2"; shift 2
+            for i in 1 2 3; do
+              code=$(curl -s -o /tmp/body -w '%{http_code}' "$@")
+              [ "$code" = "$want" ] && break
+              sleep 5
+            done
+            if [ "$code" = "$want" ]; then
+              echo "  PASS  $label  -> $code"
+            else
+              echo "  FAIL  $label  -> $code (expected $want)"
+              head -c 300 /tmp/body; echo
+              fail=1
+            fi
+          }
+          echo "===== verification ====="
+          probe "/up               php + laravel boot + rewrite chain" 200 "$BASE_URL/up"
+          probe "/                 database sessions + vite assets"    200 "$BASE_URL/"
+          probe "/api/auth/me      api routing + sanctum guard"        401 $JSON "$BASE_URL/api/auth/me"
+          probe "/api/auth/login   api -> database (bad creds)"        422 $JSON -X POST \
+            -d 'email=deploy-probe@example.invalid' -d 'password=wrong' "$BASE_URL/api/auth/login"
+          probe "/.env             secrets not web-readable"           403 "$BASE_URL/.env"
+          probe "/vendor/...       app dirs not web-readable"          403 "$BASE_URL/vendor/autoload.php"
+          [ "$fail" = 0 ] || { echo "::error::deploy verification failed"; exit 1; }
+          echo "===== deploy verified ====="
 
       - name: Clean up SSH key
         if: always()

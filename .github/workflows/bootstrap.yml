@@ -125,7 +125,7 @@ jobs:
           # `bash -s` reads the script from stdin, so stdin cannot also carry
           # data. The .env body is shipped with scp in the next step instead.
           ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
-            "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE' > provision.log 2>&1 || { cat provision.log; exit 1; }
+            "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE' > "$RUNNER_TEMP/provision.log" 2>&1 || { cat "$RUNNER_TEMP/provision.log"; exit 1; }
           set -euo pipefail
           mkdir -p "$DEPLOY_PATH"
           cd "$DEPLOY_PATH"
@@ -137,8 +137,8 @@ jobs:
           if [ -s .env ]; then echo "ENV_PRESENT"; else echo "ENV_MISSING"; fi
           echo "provision OK"
           REMOTE
-          cat provision.log
-          if grep -q ENV_MISSING provision.log; then
+          cat "$RUNNER_TEMP/provision.log"
+          if grep -q ENV_MISSING "$RUNNER_TEMP/provision.log"; then
             echo "env_missing=true" >> "$GITHUB_OUTPUT"
           else
             echo "env_missing=false" >> "$GITHUB_OUTPUT"
@@ -156,10 +156,10 @@ jobs:
           # Written to a file and scp'd so the secret never appears in argv
           # (a process list on shared hosting would otherwise expose it).
           umask 077
-          printf '%s\n' "$PROD_ENV" > prod.env
+          printf '%s\n' "$PROD_ENV" > "$RUNNER_TEMP/prod.env"
           scp -i ~/.ssh/deploy_key -P "$SSH_PORT" $SSH_OPTS -q \
-            prod.env "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/.env"
-          rm -f prod.env
+            "$RUNNER_TEMP/prod.env" "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/.env"
+          rm -f "$RUNNER_TEMP/prod.env"
           ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
             "chmod 600 '$DEPLOY_PATH/.env' && wc -l < '$DEPLOY_PATH/.env'"
           echo ".env uploaded"
