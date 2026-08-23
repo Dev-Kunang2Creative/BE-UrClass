@@ -239,22 +239,44 @@ jobs:
       - name: Verify the API is reachable
         run: |
           fail=0
-          probe() { # label, path, expected status
-            code=$(curl -s -o /tmp/body -w '%{http_code}' "$BASE_URL$2")
-            if [ "$code" = "$3" ]; then
-              echo "  PASS  $1  ($2 -> $code)"
+          JSON='-H Accept:application/json'
+          probe() { # label, expected status, curl args...
+            label="$1"; want="$2"; shift 2
+            code=$(curl -s -o /tmp/body -w '%{http_code}' "$@")
+            if [ "$code" = "$want" ]; then
+              echo "  PASS  $label  -> $code"
             else
-              echo "  FAIL  $1  ($2 -> $code, expected $3)"
-              head -c 400 /tmp/body; echo
+              echo "  FAIL  $label  -> $code (expected $want)"
+              head -c 300 /tmp/body; echo
               fail=1
             fi
           }
           echo "===== verification ====="
-          probe "health endpoint (php + laravel boot + rewrite chain)" "/up"                   200
-          probe "web route (database sessions + vite assets)"          "/"                     200
-          probe "api routing + sanctum guard"                          "/api/auth/me"          401
-          probe "secrets not web-readable"                             "/.env"                 403
-          probe "app dirs not web-readable"                            "/vendor/autoload.php"  403
+
+          probe "/up               php + laravel boot + rewrite chain" 200 \
+            "$BASE_URL/up"
+
+          probe "/                 database sessions + vite assets"    200 \
+            "$BASE_URL/"
+
+          # Accept: application/json matters. Without it Laravel's
+          # unauthenticated handler redirects to route('login'), which this
+          # API does not define, and a 500 is returned instead of a 401.
+          probe "/api/auth/me      api routing + sanctum guard"        401 \
+            $JSON "$BASE_URL/api/auth/me"
+
+          # Reaches the users table, so this proves the API talks to MySQL.
+          probe "/api/auth/login   api -> database (bad creds)"        422 \
+            $JSON -X POST \
+            -d 'email=deploy-probe@example.invalid' -d 'password=wrong' \
+            "$BASE_URL/api/auth/login"
+
+          probe "/.env             secrets not web-readable"           403 \
+            "$BASE_URL/.env"
+
+          probe "/vendor/...       app dirs not web-readable"          403 \
+            "$BASE_URL/vendor/autoload.php"
+
           [ "$fail" = 0 ] || { echo "::error::verification failed"; exit 1; }
           echo "===== API is live ====="
 
