@@ -264,6 +264,17 @@ jobs:
             echo "public/storage recreated -> $(readlink public/storage)"
           fi
 
+          # Reference data for the target-campus pickers in the profile form.
+          # storage/.seeded predates this seeder, so a database seeded before
+          # it existed has empty perguruan_tinggi / program_studi tables and
+          # the pickers would offer nothing. It upserts on the official
+          # kode_ptn / kode_prodi, so re-running it is safe.
+          if [ "$FRESH" != "true" ] && [ ! -f storage/.ptn-seeded ]; then
+            echo "--- db:seed --class=PerguruanTinggiSeeder (one-off reference data)"
+            "$php_bin" artisan db:seed --class=PerguruanTinggiSeeder --force
+            touch storage/.ptn-seeded
+          fi
+
           echo "--- storage exposure"
           ls -ld public/storage storage/app/public 2>&1 || true
           if [ -L public/storage ]; then
