@@ -249,9 +249,25 @@ jobs:
 
           # artisan storage:link cannot work here: this host disables both
           # symlink() and exec() in PHP.
-          if [ ! -e public/storage ]; then
+          #
+          # Tested with -d, not -e. A symlink whose target is missing fails -d
+          # but passes -e, so the old check left a dangling link in place
+          # forever - and a dangling link under public/ is served as 403, which
+          # is what /storage/<anything> currently returns on dev while prod
+          # returns a normal 404. Every uploaded banner and package thumbnail
+          # is behind that path.
+          if [ ! -d public/storage ]; then
+            rm -f public/storage
+            mkdir -p storage/app/public
             ln -s ../storage/app/public public/storage
-            echo "public/storage -> $(readlink public/storage)"
+            echo "public/storage recreated -> $(readlink public/storage)"
+          fi
+
+          echo "--- storage exposure"
+          ls -ld public/storage storage/app/public 2>&1 || true
+          if [ -L public/storage ]; then
+            echo "symlink target: $(readlink public/storage)"
+            echo "target resolves: $([ -d public/storage ] && echo yes || echo NO)"
           fi
 
           "$php_bin" artisan config:cache
