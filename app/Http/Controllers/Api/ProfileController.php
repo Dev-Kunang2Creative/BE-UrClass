@@ -27,6 +27,8 @@ class ProfileController extends Controller
     {
         $user = $request->user();
 
+        $targetRequired = ($user->kategori ?? 'utbk') === 'utbk' ? 'required' : 'nullable';
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'], 
             'phone_number' => ['required', 'string', 'max:20', 'regex:/^[0-9\+\-\s]+$/'],
@@ -35,9 +37,17 @@ class ProfileController extends Controller
             
             'school_origin' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'grade_level' => ['required', 'string', 'max:50', 'regex:/^[^\<\>]+$/u'],
+
+            // Previously absent from the rules, so they never reached
+            // $validated and were never saved - the form asked for them and
+            // threw the answers away.
+            'province' => ['nullable', 'string', 'max:100', 'regex:/^[^\<\>]+$/u'],
+            'city' => ['nullable', 'string', 'max:100', 'regex:/^[^\<\>]+$/u'],
             
-            'target_university_1' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
-            'target_major_1' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            // A CPNS candidate has no target campus, and requiring one meant
+            // they could not save a profile without inventing a university.
+            'target_university_1' => [$targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'target_major_1' => [$targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'target_university_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'target_major_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
         ], [
