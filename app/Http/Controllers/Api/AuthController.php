@@ -85,6 +85,23 @@ class AuthController extends Controller
         ]);
     }
 
+    /**
+     * Target for the route named "login", which this API-only app never had.
+     *
+     * Laravel falls back to route('login') when it decides an unauthenticated
+     * request should be redirected rather than answered with JSON. Two
+     * attempts to stop it deciding that - shouldRenderJsonWhen covering
+     * api/*, then an explicit render() callback for AuthenticationException -
+     * both failed to take effect on this deployment, while a ValidationException
+     * on the same host does render as JSON without an Accept header. Rather
+     * than keep guessing at why, the route it asks for now exists and answers
+     * 401, so no path can end in a 500 about a missing route.
+     */
+    public function loginNotice(): JsonResponse
+    {
+        return response()->json(['message' => 'Unauthenticated.'], 401);
+    }
+
     public function me(Request $request): JsonResponse
     {
         return response()->json([

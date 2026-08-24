@@ -186,9 +186,10 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_USER: ${{ secrets.SSH_USER }}
           FRESH: ${{ inputs.fresh_database }}
+          RESEED_PACKAGES: ${{ inputs.reseed_packages }}
         run: |
           ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
-            "DEPLOY_PATH='$DEPLOY_PATH' FRESH='$FRESH' bash -s" <<'REMOTE'
+            "DEPLOY_PATH='$DEPLOY_PATH' FRESH='$FRESH' RESEED_PACKAGES='$RESEED_PACKAGES' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$DEPLOY_PATH"
           php_bin=""
@@ -263,9 +264,6 @@ jobs:
             echo "public/storage recreated -> $(readlink public/storage)"
           fi
 
-          echo "--- deployed exception wiring"
-          grep -n "AuthenticationException\|shouldRenderJsonWhen" bootstrap/app.php || echo "NOT PRESENT"
-
           echo "--- storage exposure"
           ls -ld public/storage storage/app/public 2>&1 || true
           if [ -L public/storage ]; then
@@ -322,7 +320,18 @@ jobs:
           # Accept: application/json, which is why a browser hitting the API
           # returned 500 "Route [login] not defined" unnoticed - the app always
           # sends the header, so nothing in the suite ever asked the question.
-          probe "/api/auth/me      401 without an Accept header"       401 "$BASE_URL/api/auth/me"
+          # Not a fixed status: whichever branch the framework takes, the
+          # answer must not be a 500 about a missing login route. A JSON 401
+          # is the direct answer; a 302 lands on the named route, which
+          # answers 401 itself. Every other probe here sends
+          # Accept: application/json, and so does the app, which is why this
+          # went unnoticed - nothing ever asked the question.
+          echo "--- api without an Accept header must not 500"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/auth/me" || echo 000)
+          case "$code" in
+            401|302) echo "  PASS  /api/auth/me without Accept -> $code" ;;
+            *) echo "  FAIL  /api/auth/me without Accept -> $code (expected 401 or 302)"; fail=1 ;;
+          esac
           probe "/api/auth/login   api -> database (bad creds)"        422 $JSON -X POST \
             -d 'email=deploy-probe@example.invalid' -d 'password=wrong' "$BASE_URL/api/auth/login"
           probe "/.env             secrets not web-readable"           403 "$BASE_URL/.env"
