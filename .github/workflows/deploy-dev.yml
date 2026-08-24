@@ -13,6 +13,10 @@ on:
         description: 'DESTRUCTIVE: drop every table, re-migrate and re-seed the dev database'
         type: boolean
         default: false
+      reseed_packages:
+        description: 'Re-run PackageSeeder only: refresh the ticket packages and retire the per-track ones'
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-dev-api
@@ -222,6 +226,13 @@ jobs:
               "$php_bin" artisan db:seed --force
               touch storage/.seeded
             fi
+          fi
+
+          # PackageSeeder is idempotent on its own (keyed by slug), so it can be
+          # re-run to pick up catalogue changes without a full reseed.
+          if [ "${RESEED_PACKAGES:-false}" = "true" ] && [ "$FRESH" != "true" ]; then
+            echo "--- db:seed --class=PackageSeeder (by request)"
+            "$php_bin" artisan db:seed --class=PackageSeeder --force
           fi
 
           "$php_bin" artisan cache:clear || echo "cache:clear skipped"

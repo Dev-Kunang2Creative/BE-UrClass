@@ -6,6 +6,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
+/**
+ * @property string $kategori Legacy per-track tag. Nothing filters on it any
+ *   more: the catalogue serves both jalur because a ticket is a single balance
+ *   (users.ticket_balance) that works on either. Kept for existing rows and
+ *   reporting - do not reintroduce it as an access rule.
+ */
 class Package extends Model
 {
     use HasUlids;
