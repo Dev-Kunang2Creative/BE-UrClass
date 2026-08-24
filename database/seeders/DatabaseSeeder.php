@@ -17,6 +17,7 @@ class DatabaseSeeder extends Seeder
             PackageSeeder::class,
             CpnsContentSeeder::class,
             CpnsQuestionSeeder::class,
+            PerguruanTinggiSeeder::class,
         ]);
     }
 }

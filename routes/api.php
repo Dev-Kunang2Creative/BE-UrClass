@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\AdminPackageController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\PackageCatalogController;
+use App\Http\Controllers\Api\PerguruanTinggiController;
 use App\Http\Controllers\Api\PaymentCallbackController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\QuestionController;
@@ -55,6 +56,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/access-codes/redeem', [AccessCodeController::class, 'redeem']);
     Route::get('/ticket-logs', [TicketLogController::class, 'index']);
     Route::get('/subtests', [SubtestController::class, 'index']);
+
+    // Reference data for the target-campus pickers. Read-only; refreshed by
+    // reseeding, never through the API. /program-studi/jenjang is declared
+    // before any wildcard so it can never be swallowed by one later.
+    Route::get('/perguruan-tinggi', [PerguruanTinggiController::class, 'index']);
+    Route::get('/perguruan-tinggi/{perguruanTinggi}', [PerguruanTinggiController::class, 'show']);
+    Route::get('/perguruan-tinggi/{perguruanTinggi}/program-studi', [PerguruanTinggiController::class, 'programStudi']);
+    Route::get('/program-studi/jenjang', [PerguruanTinggiController::class, 'jenjang']);
+    Route::get('/program-studi', [PerguruanTinggiController::class, 'searchProgramStudi']);
 
     // Package & Orders
     Route::apiResource('packages', PackageCatalogController::class)->only(['index', 'show']);
