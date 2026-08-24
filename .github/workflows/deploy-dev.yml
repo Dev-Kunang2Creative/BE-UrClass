@@ -315,6 +315,11 @@ jobs:
           probe "/up               php + laravel boot + rewrite chain" 200 "$BASE_URL/up"
           probe "/                 database sessions"                  200 "$BASE_URL/"
           probe "/api/auth/me      api routing + sanctum guard"        401 $JSON "$BASE_URL/api/auth/me"
+          # Deliberately without $JSON. Every probe here sent
+          # Accept: application/json, which is why a browser hitting the API
+          # returned 500 "Route [login] not defined" unnoticed - the app always
+          # sends the header, so nothing in the suite ever asked the question.
+          probe "/api/auth/me      401 without an Accept header"       401 "$BASE_URL/api/auth/me"
           probe "/api/auth/login   api -> database (bad creds)"        422 $JSON -X POST \
             -d 'email=deploy-probe@example.invalid' -d 'password=wrong' "$BASE_URL/api/auth/login"
           probe "/.env             secrets not web-readable"           403 "$BASE_URL/.env"

@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -50,4 +51,19 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             fn ($request, $throwable) => $request->is('api/*') || $request->expectsJson()
         );
+
+        // shouldRenderJsonWhen alone was not enough, which only showed up when
+        // something other than the app called the API: a plain browser request
+        // to /api/auth/me still came back 500 "Route [login] not defined",
+        // while a 404 on the same path rendered as JSON. Handling the
+        // exception here does not depend on which branch the framework
+        // handler takes, and returns a real 401 rather than a redirect to a
+        // login page this host does not serve.
+        $exceptions->render(function (AuthenticationException $e, $request) {
+            if ($request->is('api/*') || $request->expectsJson()) {
+                return response()->json(['message' => 'Unauthenticated.'], 401);
+            }
+
+            return null;
+        });
     })->create();
