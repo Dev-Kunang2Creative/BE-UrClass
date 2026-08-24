@@ -269,6 +269,21 @@ jobs:
             echo "symlink target: $(readlink public/storage)"
             echo "target resolves: $([ -d public/storage ] && echo yes || echo NO)"
           fi
+          # storage/ is excluded from rsync, so anything sitting in here
+          # survives every deploy - including an .htaccess that would deny the
+          # whole uploads tree.
+          echo "contents:"
+          ls -la storage/app/public 2>&1 | head -20 || true
+          for f in storage/app/public/.htaccess public/.htaccess; do
+            if [ -f "$f" ] && grep -qiE "deny|Require all denied" "$f"; then
+              echo "!! $f contains a deny rule:"
+              grep -inE "deny|Require all denied" "$f" | head -5
+            fi
+          done
+
+          # A known file, so the verify step can prove uploads are reachable
+          # rather than inferring it from a 403-versus-404 guess.
+          echo storage-ok > storage/app/public/deploy-probe.txt
 
           "$php_bin" artisan config:cache
           "$php_bin" artisan route:cache
@@ -314,6 +329,20 @@ jobs:
             echo "  PASS  users table queryable (422 on bad credentials)"
           else
             echo "  FAIL  unexpected $code from login"; fail=1
+          fi
+
+          # Every tryout banner and package thumbnail is served from /storage.
+          # A warning rather than a failure: it is an environment problem, not
+          # something a code change introduced, and blocking the deploy on it
+          # would stop unrelated work from shipping.
+          echo "--- uploads are web-reachable"
+          probe_url="$BASE_URL/storage/deploy-probe.txt"
+          code=$(curl -s -o /tmp/probe -w '%{http_code}' "$probe_url" || echo 000)
+          if [ "$code" = "200" ] && grep -q storage-ok /tmp/probe; then
+            echo "  PASS  /storage is served - uploaded banners will render"
+          else
+            echo "  INFO  $probe_url -> $code"
+            echo "::warning::uploads are not web-reachable ($code) - tryout banners and package thumbnails will not render on this host"
           fi
 
           echo "--- dev must not be indexable"
