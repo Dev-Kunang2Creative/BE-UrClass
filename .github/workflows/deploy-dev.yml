@@ -90,8 +90,21 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           touch ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
 
-          if timeout 20 bash -c "cat < /dev/null > /dev/tcp/$SSH_HOST/$SSH_PORT" 2>/dev/null; then
-            echo "port is open from this runner"
+          # Retry: a single refused connection is not proof the host is down.
+          # Hostinger throttles rapid repeat connections, so a prod deploy
+          # finishing moments earlier can make the first attempt here fail.
+          open_ok=0
+          for attempt in 1 2 3 4 5; do
+            if timeout 15 bash -c "cat < /dev/null > /dev/tcp/$SSH_HOST/$SSH_PORT" 2>/dev/null; then
+              open_ok=1
+              echo "port is open from this runner (attempt $attempt)"
+              break
+            fi
+            echo "attempt $attempt: connection refused or timed out, retrying"
+            sleep 10
+          done
+          if [ "$open_ok" = 1 ]; then
+            :
           else
             echo "::error::cannot open $SSH_HOST:$SSH_PORT from this runner."
             exit 1
