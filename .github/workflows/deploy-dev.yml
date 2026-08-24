@@ -1,0 +1,283 @@
+name: Deploy dev-api.urclass.id
+
+# Development environment. Unlike the production pipeline this one DOES touch
+# the database: dev-api has its own database (u713441903_dev_urclass), so
+# migrating and seeding here cannot reach production data.
+
+on:
+  push:
+    branches: [development]
+  workflow_dispatch:
+    inputs:
+      fresh_database:
+        description: 'DESTRUCTIVE: drop every table, re-migrate and re-seed the dev database'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-dev-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, deploy, migrate, verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      BASE_URL: https://dev-api.urclass.id
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check secrets and resolve paths
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          DEV_ENV: ${{ secrets.DEV_ENV }}
+        run: |
+          miss=0
+          for v in SSH_HOST SSH_PORT SSH_USER SSH_PRIVATE_KEY DEV_ENV; do
+            if [ -z "${!v}" ]; then echo "::error::secret $v is not set"; miss=1; fi
+          done
+          [ "$miss" = 0 ] || exit 1
+          path="/home/$SSH_USER/domains/dev-api.urclass.id/public_html"
+          # Guard against this workflow ever being pointed at production by a
+          # careless copy-paste: it runs migrate:fresh, which would be fatal there.
+          case "$path" in
+            *dev-api.urclass.id*) ;;
+            *) echo "::error::refusing to run: target is not dev-api ($path)"; exit 1 ;;
+          esac
+          echo "DEPLOY_PATH=$path" >> "$GITHUB_ENV"
+
+      - name: Setup PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, bcmath, gd, zip, intl, pdo_mysql, curl, dom, fileinfo, exif, xml
+          coverage: none
+          tools: composer:v2
+
+      - name: Install PHP dependencies
+        run: |
+          cp .env.example .env
+          composer install --no-dev --optimize-autoloader --classmap-authoritative \
+                           --prefer-dist --no-interaction --no-progress
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Build frontend assets
+        run: |
+          npm ci
+          npm run build
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          touch ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
+
+          if timeout 20 bash -c "cat < /dev/null > /dev/tcp/$SSH_HOST/$SSH_PORT" 2>/dev/null; then
+            echo "port is open from this runner"
+          else
+            echo "::error::cannot open $SSH_HOST:$SSH_PORT from this runner."
+            exit 1
+          fi
+
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            echo 'SSH_OPTS=-o StrictHostKeyChecking=yes' >> "$GITHUB_ENV"
+          else
+            # keyscan is best effort: the shell runs with -e, so a failure here
+            # must not abort the step.
+            ssh-keyscan -T 15 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts \
+              || echo "ssh-keyscan failed - falling back to accept-new"
+            echo 'SSH_OPTS=-o StrictHostKeyChecking=accept-new' >> "$GITHUB_ENV"
+          fi
+
+      - name: Provision directories
+        id: provision
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' bash -s" <<'REMOTE' > "$RUNNER_TEMP/provision.log" 2>&1 || { cat "$RUNNER_TEMP/provision.log"; exit 1; }
+          set -euo pipefail
+          mkdir -p "$DEPLOY_PATH"
+          cd "$DEPLOY_PATH"
+          mkdir -p storage/framework/cache/data storage/framework/sessions \
+                   storage/framework/views storage/framework/testing \
+                   storage/logs storage/app/public storage/app/private \
+                   bootstrap/cache
+          chmod -R 775 storage bootstrap/cache
+          if [ -s .env ]; then echo "ENV_PRESENT"; else echo "ENV_MISSING"; fi
+          REMOTE
+          cat "$RUNNER_TEMP/provision.log"
+          if grep -q ENV_MISSING "$RUNNER_TEMP/provision.log"; then
+            echo "env_missing=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "env_missing=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload .env (first time only)
+        if: steps.provision.outputs.env_missing == 'true'
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          DEV_ENV: ${{ secrets.DEV_ENV }}
+        run: |
+          # scp rather than a command argument so the secret never lands in the
+          # server's process list.
+          umask 077
+          printf '%s\n' "$DEV_ENV" > "$RUNNER_TEMP/dev.env"
+          scp -i ~/.ssh/deploy_key -P "$SSH_PORT" $SSH_OPTS -q \
+            "$RUNNER_TEMP/dev.env" "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/.env"
+          rm -f "$RUNNER_TEMP/dev.env"
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
+            "chmod 600 '$DEPLOY_PATH/.env' && wc -l < '$DEPLOY_PATH/.env'"
+
+      - name: Deploy files (rsync)
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: |
+          rsync -rlptz --delete --human-readable --stats \
+            -e "ssh -i ~/.ssh/deploy_key -p $SSH_PORT $SSH_OPTS" \
+            --exclude-from=.deployignore \
+            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
+
+      - name: Migrate, seed, build caches
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          FRESH: ${{ inputs.fresh_database }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' FRESH='$FRESH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          cd "$DEPLOY_PATH"
+          php_bin=""
+          for c in /opt/alt/php83/usr/bin/php /opt/alt/php84/usr/bin/php \
+                   /usr/bin/php8.3 /usr/bin/php8.2 /usr/local/bin/php /usr/bin/php; do
+            [ -x "$c" ] || continue
+            v=$("$c" -r 'echo PHP_VERSION_ID;' 2>/dev/null || echo 0)
+            if [ "${v:-0}" -ge 80200 ]; then php_bin="$c"; break; fi
+          done
+          [ -n "$php_bin" ] || { echo "no PHP >= 8.2 CLI found"; exit 1; }
+          echo "php cli: $php_bin ($("$php_bin" -r 'echo PHP_VERSION;'))"
+
+          # Not optimize:clear - that runs cache:clear, which with
+          # CACHE_STORE=database needs the cache table to already exist.
+          "$php_bin" artisan config:clear
+          "$php_bin" artisan route:clear
+          "$php_bin" artisan view:clear
+          "$php_bin" artisan event:clear
+          "$php_bin" artisan clear-compiled
+
+          if [ "$FRESH" = "true" ]; then
+            echo "--- migrate:fresh --seed (every table dropped, by request)"
+            "$php_bin" artisan migrate:fresh --force --seed
+            touch storage/.seeded
+          else
+            echo "--- migrate"
+            "$php_bin" artisan migrate --force
+            # Seed once, not on every push: db:seed is not idempotent and would
+            # keep adding duplicate packages, subtests and questions. The marker
+            # lives in storage/, which rsync never touches.
+            if [ -f storage/.seeded ]; then
+              echo "--- already seeded (storage/.seeded) - skipping"
+            else
+              echo "--- db:seed (first time)"
+              "$php_bin" artisan db:seed --force
+              touch storage/.seeded
+            fi
+          fi
+
+          "$php_bin" artisan cache:clear || echo "cache:clear skipped"
+
+          # artisan storage:link cannot work here: this host disables both
+          # symlink() and exec() in PHP.
+          if [ ! -e public/storage ]; then
+            ln -s ../storage/app/public public/storage
+            echo "public/storage -> $(readlink public/storage)"
+          fi
+
+          "$php_bin" artisan config:cache
+          "$php_bin" artisan route:cache
+          "$php_bin" artisan view:cache
+          "$php_bin" artisan event:cache
+          echo "post-deploy OK"
+          REMOTE
+
+      - name: Verify the deploy
+        run: |
+          fail=0
+          JSON='-H Accept:application/json'
+          probe() { # label, expected status, curl args...
+            label="$1"; want="$2"; shift 2
+            for i in 1 2 3; do
+              code=$(curl -s -o /tmp/body -w '%{http_code}' "$@")
+              [ "$code" = "$want" ] && break
+              sleep 5
+            done
+            if [ "$code" = "$want" ]; then
+              echo "  PASS  $label  -> $code"
+            else
+              echo "  FAIL  $label  -> $code (expected $want)"
+              head -c 300 /tmp/body; echo
+              fail=1
+            fi
+          }
+          echo "===== verification ====="
+          probe "/up               php + laravel boot + rewrite chain" 200 "$BASE_URL/up"
+          probe "/                 database sessions"                  200 "$BASE_URL/"
+          probe "/api/auth/me      api routing + sanctum guard"        401 $JSON "$BASE_URL/api/auth/me"
+          probe "/api/auth/login   api -> database (bad creds)"        422 $JSON -X POST \
+            -d 'email=deploy-probe@example.invalid' -d 'password=wrong' "$BASE_URL/api/auth/login"
+          probe "/.env             secrets not web-readable"           403 "$BASE_URL/.env"
+
+          # The seeders create an admin, so a populated users table is the proof
+          # that seeding actually ran rather than silently doing nothing.
+          echo "--- seeded data reachable"
+          code=$(curl -s -o /tmp/lg -w '%{http_code}' $JSON -X POST \
+            -d 'email=deploy-probe@example.invalid' -d 'password=wrong' \
+            "$BASE_URL/api/auth/login")
+          if [ "$code" = "422" ]; then
+            echo "  PASS  users table queryable (422 on bad credentials)"
+          else
+            echo "  FAIL  unexpected $code from login"; fail=1
+          fi
+
+          echo "--- dev must not be indexable"
+          robots=$(curl -sI "$BASE_URL/up" | grep -i '^x-robots-tag:' | tr -d '\r' || true)
+          if printf '%s' "$robots" | grep -qi noindex; then
+            echo "  PASS  $robots"
+          else
+            echo "::warning::no X-Robots-Tag noindex on $BASE_URL \
+          (got '${robots:-none}') - SetEnvIf/mod_headers may not be active on this host"
+          fi
+
+          [ "$fail" = 0 ] || { echo "::error::verification failed"; exit 1; }
+          echo "===== dev-api is live ====="
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

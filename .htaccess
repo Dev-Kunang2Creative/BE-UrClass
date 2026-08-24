@@ -3,6 +3,14 @@
 
 Options -Indexes
 
+# Keep the dev host out of search results. This file is shared by both
+# deployments, so the rule is keyed on the hostname rather than on an env var -
+# a copy of .env is not readable from here.
+SetEnvIf Host "^dev-api\." IS_DEV_HOST
+<IfModule mod_headers.c>
+    Header always set X-Robots-Tag "noindex, nofollow" env=IS_DEV_HOST
+</IfModule>
+
 # Block dotfiles (.env, .env.backup, .gitignore, ...) even if mod_rewrite
 # is unavailable. ACME tokens are not dotfiles, so AutoSSL still works.
 <FilesMatch "^\.">
