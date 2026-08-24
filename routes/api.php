@@ -77,6 +77,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::controller(UserTryoutController::class)->group(function () {
         Route::get('/tryouts', 'index');
         Route::get('/my-tryouts', 'myTryouts');
+        // Declared before the tryouts/{tryout} prefix group below so the
+        // detail route is matched, not swallowed by one of its children.
+        Route::get('/tryouts/{tryout}', 'show');
 
         Route::prefix('tryouts/{tryout}')->group(function () {
             Route::post('/enroll', 'enroll');

@@ -62,20 +62,95 @@ class UserTryoutController extends Controller
             ->get();
 
         $tryouts->each(function ($tryout) use ($accessByTryout, $sessionStatsByTryout, $sessionsByTryout) {
-            $access = $accessByTryout->get($tryout->id);
-            $session = $sessionsByTryout->get($tryout->id);
-            $sessionStats = $sessionStatsByTryout->get($tryout->id);
-
-            $tryout->setAttribute('user_is_enrolled', (bool) $access);
-            $tryout->setAttribute('user_attempt_count', (int) ($sessionStats?->attempt_count ?? 0));
-            $tryout->setAttribute('user_session_status', $session?->status ?? ($access ? 'not_started' : null));
-            $tryout->setAttribute('user_started_at', $session?->started_at);
-            $tryout->setAttribute('user_finished_at', $session?->finished_at);
+            $this->decorateUserState(
+                $tryout,
+                $accessByTryout->get($tryout->id),
+                $sessionsByTryout->get($tryout->id),
+                (int) ($sessionStatsByTryout->get($tryout->id)?->attempt_count ?? 0),
+            );
         });
 
         return response()->json([
             'data' => $tryouts,
         ]);
+    }
+
+    /**
+     * One tryout, shaped exactly like one item of index().
+     *
+     * There was no such endpoint, so the frontend fetched the whole list and
+     * picked the id out of it on the client: every detail view downloaded every
+     * tryout, and because that list is filtered by track, a tryout belonging to
+     * the other jalur came back as "not found" rather than as what it is.
+     */
+    public function show(Request $request, Tryout $tryout): JsonResponse
+    {
+        $user = $request->user();
+
+        if (! $tryout->is_published) {
+            return response()->json(['message' => 'Tryout ini tidak tersedia'], 404);
+        }
+
+        $userKategori = $user->kategori ?? 'utbk';
+
+        // Not a 404: the tryout exists and the reader may well have meant to
+        // open it. Saying which jalur it belongs to lets the client offer to
+        // switch instead of claiming the thing does not exist.
+        if (($tryout->kategori ?? 'utbk') !== $userKategori) {
+            return response()->json([
+                'message' => 'Tryout ini ada di jalur lain.',
+                'kategori' => $tryout->kategori ?? 'utbk',
+            ], 403);
+        }
+
+        $tryout->load([
+            'creator',
+            'tryoutSubtests.subtest' => fn ($query) => $query->withCount([
+                'questions' => fn ($questionQuery) => $questionQuery->where('is_active', true),
+            ]),
+        ]);
+        $tryout->loadCount('userAccesses');
+
+        $access = UserTryoutAccess::where('user_id', $user->id)
+            ->where('tryout_id', $tryout->id)
+            ->first();
+
+        $session = TryoutSession::where('user_id', $user->id)
+            ->where('tryout_id', $tryout->id)
+            ->orderByDesc('attempt_number')
+            ->orderByDesc('created_at')
+            ->first();
+
+        $attemptCount = TryoutSession::where('user_id', $user->id)
+            ->where('tryout_id', $tryout->id)
+            ->count();
+
+        $this->decorateUserState($tryout, $access, $session, $attemptCount);
+
+        return response()->json([
+            'data' => $tryout,
+        ]);
+    }
+
+    /**
+     * The per-user attributes the client reads off a tryout. Shared by index()
+     * and show() so a detail view can never disagree with the list it came
+     * from about whether someone is enrolled or mid-attempt.
+     */
+    private function decorateUserState(
+        Tryout $tryout,
+        ?UserTryoutAccess $access,
+        ?TryoutSession $session,
+        int $attemptCount,
+    ): void {
+        $tryout->setAttribute('user_is_enrolled', (bool) $access);
+        $tryout->setAttribute('user_attempt_count', $attemptCount);
+        $tryout->setAttribute(
+            'user_session_status',
+            $session?->status ?? ($access ? 'not_started' : null)
+        );
+        $tryout->setAttribute('user_started_at', $session?->started_at);
+        $tryout->setAttribute('user_finished_at', $session?->finished_at);
     }
 
     public function enroll(Request $request, Tryout $tryout): JsonResponse
