@@ -263,6 +263,9 @@ jobs:
             echo "public/storage recreated -> $(readlink public/storage)"
           fi
 
+          echo "--- deployed exception wiring"
+          grep -n "AuthenticationException\|shouldRenderJsonWhen" bootstrap/app.php || echo "NOT PRESENT"
+
           echo "--- storage exposure"
           ls -ld public/storage storage/app/public 2>&1 || true
           if [ -L public/storage ]; then
