@@ -1,0 +1,176 @@
+name: Copy integration keys from prod to dev
+
+# Copies third-party credentials (Google OAuth, Midtrans) from the production
+# .env into the dev .env.
+#
+# Both files live on the same server, so the values are read and written there
+# and never travel through this runner or appear in a log. Only key NAMES are
+# printed.
+#
+# Deliberately NOT a full env copy. DB_*, APP_KEY, APP_URL and the session and
+# frontend settings are per-environment: copying them would point dev at the
+# production database, which is the one mistake this workflow exists to make
+# impossible. The allowlist is explicit and a second guard rejects anything
+# matching the dangerous prefixes even if someone adds it to the list later.
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_turnstile:
+        description: 'Also copy Turnstile keys (needs app-dev.urclass.id added as a hostname on the widget first, or captcha will refuse to render)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: deploy-dev-api
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Copy keys, rebuild dev config cache
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check secrets
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          miss=0
+          for v in SSH_HOST SSH_PORT SSH_USER SSH_PRIVATE_KEY; do
+            if [ -z "${!v}" ]; then echo "::error::secret $v is not set"; miss=1; fi
+          done
+          [ "$miss" = 0 ] || exit 1
+          echo "PROD_PATH=/home/$SSH_USER/domains/prod-api.urclass.id/public_html" >> "$GITHUB_ENV"
+          echo "DEV_PATH=/home/$SSH_USER/domains/dev-api.urclass.id/public_html" >> "$GITHUB_ENV"
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          touch ~/.ssh/known_hosts && chmod 600 ~/.ssh/known_hosts
+
+          open_ok=0
+          for attempt in 1 2 3 4 5; do
+            if timeout 15 bash -c "cat < /dev/null > /dev/tcp/$SSH_HOST/$SSH_PORT" 2>/dev/null; then
+              open_ok=1; break
+            fi
+            echo "attempt $attempt: not reachable yet, retrying"
+            sleep 10
+          done
+          [ "$open_ok" = 1 ] || { echo "::error::cannot reach $SSH_HOST:$SSH_PORT"; exit 1; }
+
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+            echo 'SSH_OPTS=-o StrictHostKeyChecking=yes' >> "$GITHUB_ENV"
+          else
+            ssh-keyscan -T 15 -p "$SSH_PORT" "$SSH_HOST" >> ~/.ssh/known_hosts \
+              || echo "ssh-keyscan failed - falling back to accept-new"
+            echo 'SSH_OPTS=-o StrictHostKeyChecking=accept-new' >> "$GITHUB_ENV"
+          fi
+
+      - name: Copy the allowlisted keys
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          WITH_TURNSTILE: ${{ inputs.include_turnstile }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
+            "PROD_PATH='$PROD_PATH' DEV_PATH='$DEV_PATH' WITH_TURNSTILE='$WITH_TURNSTILE' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          [ -r "$PROD_PATH/.env" ] || { echo "cannot read prod .env"; exit 1; }
+          [ -w "$DEV_PATH/.env" ]  || { echo "cannot write dev .env"; exit 1; }
+
+          KEYS="GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MIDTRANS_SERVER_KEY MIDTRANS_CLIENT_KEY"
+          if [ "$WITH_TURNSTILE" = "true" ]; then
+            KEYS="$KEYS CLOUDFLARE_TURNSTILE_SITE_KEY CLOUDFLARE_TURNSTILE_SECRET_KEY"
+          fi
+
+          cp -p "$DEV_PATH/.env" "$DEV_PATH/.env.bak-sync"
+          echo "dev .env backed up to .env.bak-sync"
+
+          copied=""; empty=""; refused=""
+
+          for key in $KEYS; do
+            # Second guard. Even if the list above is edited later, nothing that
+            # binds an environment to its own database or identity gets through.
+            case "$key" in
+              DB_*|APP_KEY|APP_URL|APP_ENV|APP_DEBUG|FRONTEND_URL|SANCTUM_*|SESSION_*)
+                refused="$refused $key"; continue ;;
+            esac
+
+            # Last occurrence wins, matching how dotenv itself resolves repeats.
+            line=$(grep -E "^${key}=" "$PROD_PATH/.env" | tail -n 1 || true)
+            value=${line#*=}
+
+            if [ -z "$line" ] || [ -z "$value" ]; then
+              empty="$empty $key"
+              continue
+            fi
+
+            # Drop any existing line for this key, then append the new one.
+            # Deliberately not sed: these values contain & / + and ? , which sed
+            # would read as syntax. printf never interprets the value.
+            # The key moves to the end of the file as a result, which dotenv
+            # does not care about.
+            tmp=$(mktemp)
+            grep -vE "^${key}=" "$DEV_PATH/.env" > "$tmp" || true
+            printf '%s=%s\n' "$key" "$value" >> "$tmp"
+            # cat rather than mv, so the file keeps its own inode and 600 mode.
+            cat "$tmp" > "$DEV_PATH/.env"
+            rm -f "$tmp"
+
+            copied="$copied $key"
+          done
+
+          chmod 600 "$DEV_PATH/.env"
+
+          # Names only. The values are the whole point of not printing anything.
+          echo "copied :${copied:- none}"
+          echo "empty in prod, left alone :${empty:- none}"
+          echo "refused by guard :${refused:- none}"
+
+          cd "$DEV_PATH"
+          php_bin=""
+          for c in /opt/alt/php83/usr/bin/php /opt/alt/php84/usr/bin/php \
+                   /usr/bin/php8.3 /usr/bin/php8.2 /usr/local/bin/php /usr/bin/php; do
+            [ -x "$c" ] || continue
+            v=$("$c" -r 'echo PHP_VERSION_ID;' 2>/dev/null || echo 0)
+            if [ "${v:-0}" -ge 80200 ]; then php_bin="$c"; break; fi
+          done
+          [ -n "$php_bin" ] || { echo "no PHP >= 8.2 found"; exit 1; }
+
+          # Editing .env changes nothing until the cached config is rebuilt.
+          "$php_bin" artisan config:clear
+          "$php_bin" artisan config:cache
+          echo "dev config cache rebuilt"
+          REMOTE
+
+      - name: Verify Google is now configured on dev
+        run: |
+          # The redirect URL carries client_id in the clear, so this confirms the
+          # copy landed without reading .env or printing any secret.
+          url=$(curl -s -H 'Accept: application/json' \
+                https://dev-api.urclass.id/api/auth/google/redirect \
+                | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
+          if printf '%s' "$url" | grep -q 'client_id=[^&]\+'; then
+            echo "  PASS  dev google client_id is set"
+          else
+            echo "  FAIL  dev google client_id still empty"
+            exit 1
+          fi
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
