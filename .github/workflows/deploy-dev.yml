@@ -233,6 +233,16 @@ jobs:
           if [ "${RESEED_PACKAGES:-false}" = "true" ] && [ "$FRESH" != "true" ]; then
             echo "--- db:seed --class=PackageSeeder (by request)"
             "$php_bin" artisan db:seed --class=PackageSeeder --force
+          elif [ "$FRESH" != "true" ] && [ ! -f storage/.packages-unified ]; then
+            # One-off: the catalogue stopped being per-track, so the dev rows
+            # need the new names and the two SKD packages need retiring. The
+            # database was already seeded before that change, so the seed-once
+            # marker would have skipped it forever. Deliberately not guarded by
+            # anything prod-shaped: the production workflow runs neither migrate
+            # nor db:seed, so live package rows are never touched from here.
+            echo "--- db:seed --class=PackageSeeder (one-off catalogue merge)"
+            "$php_bin" artisan db:seed --class=PackageSeeder --force
+            touch storage/.packages-unified
           fi
 
           "$php_bin" artisan cache:clear || echo "cache:clear skipped"
