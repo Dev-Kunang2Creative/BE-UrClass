@@ -137,6 +137,74 @@ class ScoringService
     }
 
     /**
+     * Skor per subtest untuk satu sesi.
+     *
+     * Dipakai halaman hasil: peserta CPNS dinilai per ambang (TWK/TIU/TKP), dan
+     * satu subtest di bawah ambang membatalkan seluruh SKD berapa pun skor yang
+     * lain. Angka agregat saja menyembunyikan satu-satunya hal yang menentukan.
+     *
+     * Memakai kolom score yang sama dengan rawScoreForSession dan
+     * maxScoreForQuestion yang sama dengan maxScoreForSession, supaya rincian
+     * ini tidak mungkin berbeda dari totalnya.
+     *
+     * Ambang lulus sengaja tidak dihitung di sini - itu urusan tampilan, dan
+     * menaruhnya di dua tempat berarti dua tempat yang bisa basi.
+     */
+    public static function perSubtestBreakdown(TryoutSession $session): array
+    {
+        $subtestIds = $session->tryout
+            ?->tryoutSubtests()
+            ->where('is_active', true)
+            ->pluck('subtest_id') ?? collect();
+
+        if ($subtestIds->isEmpty()) {
+            return [];
+        }
+
+        // Satu query berkelompok, bukan satu query per subtest: ini jalan di
+        // shared hosting dan satu tryout bisa punya tujuh subtest.
+        $stats = $session->answers()
+            ->join('questions', 'questions.id', '=', 'user_answers.question_id')
+            ->whereIn('questions.subtest_id', $subtestIds)
+            ->selectRaw('questions.subtest_id as sid')
+            ->selectRaw('SUM(user_answers.score) as raw_score')
+            ->selectRaw('SUM(CASE WHEN user_answers.is_correct = 1 THEN 1 ELSE 0 END) as correct')
+            ->selectRaw('SUM(CASE WHEN user_answers.answer IS NOT NULL THEN 1 ELSE 0 END) as answered')
+            ->groupBy('questions.subtest_id')
+            ->get()
+            ->keyBy('sid');
+
+        $out = [];
+
+        foreach (Subtest::whereIn('id', $subtestIds)->get() as $subtest) {
+            $questions = Question::where('subtest_id', $subtest->id)
+                ->where('is_active', true)
+                ->get();
+
+            $max = 0.0;
+            foreach ($questions as $question) {
+                $max += self::maxScoreForQuestion($question, $subtest);
+            }
+
+            $stat = $stats->get($subtest->id);
+
+            $out[] = [
+                'subtest_id' => $subtest->id,
+                'name' => $subtest->name,
+                'exam_type' => $subtest->exam_type,
+                'scheme' => self::schemeFor($subtest),
+                'total_questions' => $questions->count(),
+                'answered' => (int) ($stat->answered ?? 0),
+                'correct' => (int) ($stat->correct ?? 0),
+                'raw_score' => round((float) ($stat->raw_score ?? 0), 2),
+                'max_score' => round($max, 2),
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
      * Skor maksimum yang mungkin dicapai untuk satu soal.
      */
     public static function maxScoreForQuestion(Question $question, Subtest $subtest): float

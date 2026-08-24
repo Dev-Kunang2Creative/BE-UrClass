@@ -688,6 +688,10 @@ class UserTryoutController extends Controller
                 'final_score' => ! $tryout->use_irt ? round($simpleFinalScore, 2) : 0,
                 'accuracy' => round($accuracy, 2),
             ],
+            // Rincian per subtest: peserta CPNS dinilai per ambang, dan satu
+            // subtest di bawah ambang membatalkan seluruh SKD. Agregat saja
+            // menyembunyikan satu-satunya angka yang menentukan lulus.
+            'per_subtest' => ScoringService::perSubtestBreakdown($session),
             'irt_result' => null,
         ];
 
