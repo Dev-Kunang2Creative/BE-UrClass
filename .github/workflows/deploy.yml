@@ -229,7 +229,7 @@ jobs:
           probe() { # label, expected status, curl args...
             label="$1"; want="$2"; shift 2
             for i in 1 2 3; do
-              code=$(curl -s -o /tmp/body -w '%{http_code}' "$@")
+              code=$(curl -s -o /tmp/body -w '%{http_code}' "$@" || echo 000)
               [ "$code" = "$want" ] && break
               sleep 5
             done

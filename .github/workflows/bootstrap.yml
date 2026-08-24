@@ -242,7 +242,7 @@ jobs:
           JSON='-H Accept:application/json'
           probe() { # label, expected status, curl args...
             label="$1"; want="$2"; shift 2
-            code=$(curl -s -o /tmp/body -w '%{http_code}' "$@")
+            code=$(curl -s -o /tmp/body -w '%{http_code}' "$@" || echo 000)
             if [ "$code" = "$want" ]; then
               echo "  PASS  $label  -> $code"
             else
