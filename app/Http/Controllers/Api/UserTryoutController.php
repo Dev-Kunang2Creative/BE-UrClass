@@ -182,7 +182,16 @@ class UserTryoutController extends Controller
     {
         $user = $request->user();
 
+        // Filtered by track, like index() already was. Without this, every
+        // attempt the user has ever made came back on both dashboards: someone
+        // who had only ever sat an SKD tryout saw that score on the UTBK
+        // dashboard, and saw it presented against the UTBK scale of 1000
+        // instead of the 550 an SKD score is out of.
         $tryoutIds = UserTryoutAccess::where('user_id', $user->id)
+            ->whereIn(
+                'tryout_id',
+                Tryout::where('kategori', $user->kategori ?? 'utbk')->select('id')
+            )
             ->pluck('tryout_id');
 
         $sessionsByTryout = TryoutSession::where('user_id', $user->id)
