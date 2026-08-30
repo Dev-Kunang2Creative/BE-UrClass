@@ -306,28 +306,32 @@ class TryoutController extends Controller
             ];
         });
 
-        $origin = request()->header('Origin') ?: '*';
-        header('Access-Control-Allow-Origin: ' . $origin);
-        header('Access-Control-Allow-Methods: GET, OPTIONS');
-        header('Access-Control-Allow-Headers: Authorization, Content-Type, Accept');
-        header('Access-Control-Allow-Credentials: true');
-        header('Access-Control-Expose-Headers: Content-Disposition');
+        if (!headers_sent()) {
+            $origin = request()->header('Origin') ?: '*';
+            header('Access-Control-Allow-Origin: ' . $origin);
+            header('Access-Control-Allow-Methods: GET, OPTIONS');
+            header('Access-Control-Allow-Headers: Authorization, Content-Type, Accept');
+            header('Access-Control-Allow-Credentials: true');
+            header('Access-Control-Expose-Headers: Content-Disposition');
+        }
+
+        $logoPath = public_path('images/logo/urclass.png');
+        $logoBase64 = file_exists($logoPath) ? 'data:image/png;base64,' . base64_encode(file_get_contents($logoPath)) : null;
 
         $pdf = PDF::loadView('pdf.tryout', [
             'tryout' => $tryout,
             'subtests' => $subtests,
+            'logoBase64' => $logoBase64,
         ], [], [
             'title' => 'Tryout ' . $tryout->title,
-            'margin_top' => 15,
-            'margin_bottom' => 15,
-            'margin_left' => 15,
-            'margin_right' => 15,
-            'watermark_image_path' => public_path('images/logo/urclass.png'),
-            'watermark_image_alpha' => 0.08,
-            'watermark_image_size' => 'D',
-            'show_watermark_image' => true,
+            'margin_top' => 12,
+            'margin_bottom' => 14,
+            'margin_left' => 14,
+            'margin_right' => 14,
+            'show_watermark_image' => false,
+            'show_watermark' => false,
         ]);
 
-        return $pdf->download('Tryout_' . Str::slug($tryout->title) . '.pdf');
+        return $pdf->stream('Tryout_' . Str::slug($tryout->title) . '.pdf');
     }
 }
