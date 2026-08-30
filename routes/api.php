@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\AccessCodeController;
+use App\Http\Controllers\Api\InstagramAccountController;
 use App\Http\Controllers\Api\AdminAccessCodeController;
 use App\Http\Controllers\Api\AdminOrderController;
 use App\Http\Controllers\Api\AdminPackageController;
@@ -55,6 +56,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/profile/kategori', [ProfileController::class, 'updateKategori'])->middleware('throttle:15,1');
     Route::post('/access-codes/redeem', [AccessCodeController::class, 'redeem']);
     Route::get('/ticket-logs', [TicketLogController::class, 'index']);
+
+    // Dibaca halaman pendaftaran tryout gratis untuk menampilkan akun yang
+    // harus di-follow sekaligus menentukan berapa bukti yang diminta.
+    Route::get('/instagram-accounts', [InstagramAccountController::class, 'index']);
     Route::get('/subtests', [SubtestController::class, 'index']);
 
     // Reference data for the target-campus pickers. Read-only; refreshed by
@@ -135,9 +140,12 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::apiResource('subtests', SubtestController::class)->except(['index']);
         Route::apiResource('subtests.questions', QuestionController::class);
         Route::post('/subtests/{subtest}/questions/bulk-import', [BulkImportQuestionController::class, 'store']);
-        Route::post('/subtests/{subtest}/questions/bulk-update-images', [BulkImportQuestionController::class, 'updateImagesFromExcel']);
-        Route::get('/questions/bulk-import/template', [BulkImportQuestionController::class, 'template']);
         Route::get('/questions/bulk-import/excel-template', [BulkImportQuestionController::class, 'excelTemplate']);
+
+        Route::get('/instagram-accounts', [InstagramAccountController::class, 'adminIndex']);
+        Route::post('/instagram-accounts', [InstagramAccountController::class, 'store']);
+        Route::put('/instagram-accounts/{instagramAccount}', [InstagramAccountController::class, 'update']);
+        Route::delete('/instagram-accounts/{instagramAccount}', [InstagramAccountController::class, 'destroy']);
 
         // --- TRYOUT & PENGATURAN TRYOUT ---
         Route::get('/tryouts/{tryout}/participants', [TryoutController::class, 'participants']);

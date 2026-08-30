@@ -39,7 +39,9 @@ class TryoutController extends Controller
             'image' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'start_date' => ['nullable', 'date'],
             'end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
-            'category' => ['nullable', 'string', Rule::in(['UTBK', 'UM', 'SNBP', 'SKD', 'SKB', 'Kedinasan'])],
+            // Hanya dua kategori: UTBK dan CPNS. Sub-kategori lama (UM, SNBP,
+            // SKD, SKB, Kedinasan) tidak dipakai UrClass.
+            'category' => ['nullable', 'string', Rule::in(['UTBK', 'CPNS'])],
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
             'is_free' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
@@ -56,8 +58,11 @@ class TryoutController extends Controller
         }
 
         $validated['created_by'] = $request->user()->id;
+        // Kategori diturunkan dari jalurnya, bukan dipilih terpisah: keduanya
+        // menyatakan hal yang sama, dan kalau bisa diisi sendiri-sendiri akan
+        // ada tryout berjalur CPNS tapi berkategori UTBK.
         $kategori = $validated['kategori'] ?? 'utbk';
-        $validated['category'] = $validated['category'] ?? ($kategori === 'cpns' ? 'SKD' : 'UTBK');
+        $validated['category'] = strtoupper($kategori);
         $validated['is_free'] = $validated['is_free'] ?? false;
         $validated['use_irt'] = $validated['use_irt'] ?? true;
         $validated['randomize_options'] = $validated['randomize_options'] ?? false;
@@ -158,7 +163,9 @@ class TryoutController extends Controller
             'image' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'start_date' => ['nullable', 'date'],
             'end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
-            'category' => ['nullable', 'string', Rule::in(['UTBK', 'UM', 'SNBP', 'SKD', 'SKB', 'Kedinasan'])],
+            // Hanya dua kategori: UTBK dan CPNS. Sub-kategori lama (UM, SNBP,
+            // SKD, SKB, Kedinasan) tidak dipakai UrClass.
+            'category' => ['nullable', 'string', Rule::in(['UTBK', 'CPNS'])],
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
             'is_free' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
@@ -182,7 +189,7 @@ class TryoutController extends Controller
         $validated['randomize_options'] = $validated['randomize_options'] ?? $tryout->randomize_options;
         $validated['is_published'] = $validated['is_published'] ?? $tryout->is_published;
         $kategori = $validated['kategori'] ?? $tryout->kategori ?? 'utbk';
-        $validated['category'] = $validated['category'] ?? $tryout->category ?? ($kategori === 'cpns' ? 'SKD' : 'UTBK');
+        $validated['category'] = strtoupper($kategori);
 
         $tryout->update($validated);
         AuditLogger::log('Tryout', 'update', "Tryout diupdate: \"{$tryout->title}\"", $request->user(), $tryout);

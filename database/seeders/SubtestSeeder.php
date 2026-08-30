@@ -35,9 +35,18 @@ class SubtestSeeder extends Seeder
                 ['category' => $item['category'], 'exam_type' => $item['exam_type'], 'max_questions' => $item['max_questions']]
             );
 
-            // TKP is scored per-option (1-5), not right/wrong. See ScoringService.
+            // Skemanya mengikuti jalur: UTBK selalu IRT, TKP bobot per opsi,
+            // sisanya benar/salah. Lihat ScoringService::defaultSchemeFor.
+            $scheme = ScoringService::defaultSchemeFor($subtest);
+
             $subtest->update([
-                'scoring_scheme' => ScoringService::defaultSchemeFor($subtest),
+                'scoring_scheme' => $scheme,
+                // SKD gives 5 points per correct TWK/TIU answer, which is what
+                // makes the passing grades (65 of 150, 80 of 175) mean anything.
+                // Pada IRT tidak ada poin yang ditetapkan, jadi tetap 1.
+                'score_correct' => $scheme === ScoringService::SCHEME_RIGHT_WRONG
+                    ? ScoringService::CPNS_SCORE_CORRECT
+                    : 1,
             ]);
         }
     }

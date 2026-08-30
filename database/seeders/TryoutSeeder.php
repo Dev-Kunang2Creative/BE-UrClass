@@ -39,7 +39,7 @@ class TryoutSeeder extends Seeder
                 'description'  => 'Tryout khusus untuk calon peserta SNBP. Berisi soal-soal prediksi berdasarkan pola soal tahun-tahun sebelumnya.',
                 'start_date'   => now()->addDays(30),
                 'end_date'     => now()->addDays(60),
-                'category'     => 'SNBP',
+                'category'     => 'UTBK',
                 'kategori'     => 'utbk',
                 'is_published' => false,
             ],

@@ -22,11 +22,27 @@ class ScoringService
     public const SCHEME_OPTION_WEIGHT = 'option_weight';
 
     /**
-     * Mapping default per exam_type + nama subtes sesuai BRD:
-     *   CPNS/Kedinasan  TWK -> Benar/Salah
-     *   CPNS/Kedinasan  TIU -> Benar/Salah
-     *   CPNS/Kedinasan  TKP -> Bobot per Opsi
-     *   UTBK            -> bebas dipilih admin (default Benar/Salah)
+     * Skala bobot TKP: tiap opsi bernilai 1-5, tidak ada opsi bernilai 0.
+     */
+    public const OPTION_WEIGHT_MIN = 1;
+    public const OPTION_WEIGHT_MAX = 5;
+
+    /**
+     * Nilai per soal untuk TWK/TIU SKD: benar 5, salah dan kosong 0, sehingga
+     * 30 soal TWK bernilai maksimal 150 dan 35 soal TIU 175 - angka yang
+     * dipakai Passing Grade KepmenPAN-RB (TWK 65, TIU 80, TKP 166).
+     */
+    public const CPNS_SCORE_CORRECT = 5;
+
+    /**
+     * Skema penilaian ditentukan jalurnya, bukan dipilih bebas:
+     *   UTBK            -> IRT selalu
+     *   CPNS  TKP       -> Bobot per Opsi
+     *   CPNS  selainnya -> Benar/Salah
+     *
+     * UTBK dikunci ke IRT karena memang begitu ujiannya dinilai: jawaban
+     * dihitung benar/salah, lalu bobot tiap soal diturunkan dari hasil seluruh
+     * peserta. Tidak ada poin benar/salah yang perlu ditetapkan admin.
      */
     public static function defaultSchemeFor(Subtest $subtest): string
     {
@@ -35,10 +51,11 @@ class ScoringService
             if (str_contains($name, 'TKP')) {
                 return self::SCHEME_OPTION_WEIGHT;
             }
+
             return self::SCHEME_RIGHT_WRONG;
         }
 
-        return self::SCHEME_RIGHT_WRONG;
+        return self::SCHEME_IRT;
     }
 
     public static function schemeFor(Subtest $subtest): string
@@ -83,6 +100,18 @@ class ScoringService
 
         $isCorrect = $question->correct_answer !== null
             && strcasecmp(trim($answer), trim((string) $question->correct_answer)) === 0;
+
+        // IRT menilai benar/salah juga, tapi tanpa poin yang ditetapkan admin:
+        // yang disimpan sekadar tanda benar (1) atau salah (0). Bobot tiap soal
+        // baru dihitung belakangan dari hasil seluruh peserta, jadi memakai
+        // score_correct di sini akan mengarang angka yang tidak dipakai apa pun.
+        if ($scheme === self::SCHEME_IRT) {
+            return [
+                'is_correct' => $isCorrect,
+                'score' => $isCorrect ? 1.0 : 0.0,
+                'scheme' => $scheme,
+            ];
+        }
 
         return [
             'is_correct' => $isCorrect,
@@ -209,10 +238,86 @@ class ScoringService
      */
     public static function maxScoreForQuestion(Question $question, Subtest $subtest): float
     {
-        if (self::schemeFor($subtest) === self::SCHEME_OPTION_WEIGHT) {
+        $scheme = self::schemeFor($subtest);
+
+        if ($scheme === self::SCHEME_OPTION_WEIGHT) {
             return (float) QuestionOption::where('question_id', $question->id)->max('score');
         }
 
+        // Sejalan dengan scoreAnswer: pada IRT satu soal bernilai 1, bukan
+        // score_correct yang memang tidak dipakai di skema ini.
+        if ($scheme === self::SCHEME_IRT) {
+            return 1.0;
+        }
+
         return (float) ($subtest->score_correct ?? 1);
+    }
+
+    /**
+     * Apakah sekumpulan bobot opsi sah untuk skema option_weight.
+     *
+     * Aturannya mengikuti TKP SKD: setiap opsi punya bobot bilangan bulat 1-5,
+     * tidak boleh ada yang kembar, dan harus ada satu opsi bernilai 5 - yaitu
+     * respons paling ideal. Untuk soal berisi 5 opsi, ketiga syarat itu hanya
+     * bisa dipenuhi oleh permutasi 1,2,3,4,5.
+     *
+     * Dipakai baik oleh form soal maupun impor Excel supaya keduanya tidak
+     * mungkin punya definisi "bobot benar" yang berbeda.
+     */
+    public static function validateOptionWeights(array $scores): ?string
+    {
+        if (count($scores) < 2) {
+            return 'Soal dengan bobot per opsi butuh minimal 2 opsi.';
+        }
+
+        $values = [];
+
+        foreach ($scores as $score) {
+            if ($score === null || $score === '') {
+                return 'Setiap opsi wajib punya bobot 1-5. Pada skema ini tidak ada opsi yang bernilai 0.';
+            }
+
+            $value = (float) $score;
+
+            if (floor($value) != $value
+                || $value < self::OPTION_WEIGHT_MIN
+                || $value > self::OPTION_WEIGHT_MAX) {
+                return 'Bobot opsi harus bilangan bulat ' . self::OPTION_WEIGHT_MIN . '-' . self::OPTION_WEIGHT_MAX . '.';
+            }
+
+            $values[] = (int) $value;
+        }
+
+        if (count(array_unique($values)) !== count($values)) {
+            return 'Bobot antar opsi tidak boleh kembar: urutkan dari 1 (paling tidak sesuai) sampai 5 (paling sesuai).';
+        }
+
+        if (! in_array(self::OPTION_WEIGHT_MAX, $values, true)) {
+            return 'Harus ada satu opsi bernilai ' . self::OPTION_WEIGHT_MAX . ' sebagai jawaban paling ideal.';
+        }
+
+        return null;
+    }
+
+    /**
+     * Soal option_weight yang bobotnya belum digarap.
+     *
+     * Soal yang diimpor sebelum kolom bobot ada tersimpan sebagai 1 untuk kunci
+     * dan 0 untuk sisanya. Itu tetap menghasilkan angka, jadi tanpa penanda
+     * eksplisit soal rusak seperti ini tidak terlihat di mana pun - hanya
+     * membuat skor TKP peserta jauh lebih rendah dari seharusnya.
+     */
+    public static function questionNeedsOptionWeights(Question $question, Subtest $subtest): bool
+    {
+        if (self::schemeFor($subtest) !== self::SCHEME_OPTION_WEIGHT) {
+            return false;
+        }
+
+        $scores = QuestionOption::where('question_id', $question->id)
+            ->orderBy('option_key')
+            ->pluck('score')
+            ->all();
+
+        return self::validateOptionWeights($scores) !== null;
     }
 }
