@@ -27,16 +27,25 @@ class ProfileController extends Controller
     {
         $user = $request->user();
 
-        $targetRequired = ($user->kategori ?? 'utbk') === 'utbk' ? 'required' : 'nullable';
+        // Admin tidak pernah mengikuti tryout, jadi tidak ada sertifikat maupun
+        // laporan nilai yang perlu memakai data dirinya. Yang tersisa hanyalah
+        // nama; sisanya diterima kalau dikirim, tapi tidak pernah diwajibkan.
+        $isAdmin = ($user->role ?? 'user') === 'admin';
+
+        $profileRequired = $isAdmin ? 'nullable' : 'required';
+
+        $targetRequired = $isAdmin || ($user->kategori ?? 'utbk') !== 'utbk'
+            ? 'nullable'
+            : 'required';
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'], 
-            'phone_number' => ['required', 'string', 'max:20', 'regex:/^[0-9\+\-\s]+$/'],
-            'birth_date' => ['required', 'date'],
-            'gender' => ['required', 'in:L,P'],
+            'phone_number' => [$profileRequired, 'string', 'max:20', 'regex:/^[0-9\+\-\s]+$/'],
+            'birth_date' => [$profileRequired, 'date'],
+            'gender' => [$profileRequired, 'in:L,P'],
             
-            'school_origin' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
-            'grade_level' => ['required', 'string', 'max:50', 'regex:/^[^\<\>]+$/u'],
+            'school_origin' => [$profileRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'grade_level' => [$profileRequired, 'string', 'max:50', 'regex:/^[^\<\>]+$/u'],
 
             // Previously absent from the rules, so they never reached
             // $validated and were never saved - the form asked for them and
@@ -46,6 +55,7 @@ class ProfileController extends Controller
             
             // A CPNS candidate has no target campus, and requiring one meant
             // they could not save a profile without inventing a university.
+            // Sama halnya dengan admin, yang tidak punya target kampus apa pun.
             'target_university_1' => [$targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'target_major_1' => [$targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'target_university_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
