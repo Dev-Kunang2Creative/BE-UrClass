@@ -275,6 +275,31 @@ jobs:
             touch storage/.ptn-seeded
           fi
 
+          # Same problem, later seeders: storage/.seeded predates all of these,
+          # so the seed-once guard above skips db:seed entirely and a database
+          # seeded before they existed never gets their rows. Each upserts on a
+          # stable key, so re-running is safe; each gets its own marker so
+          # adding the next one does not re-run the previous.
+          #
+          # subtest-categories is the one that fails loudly rather than quietly:
+          # SubtestController validates category against that table, so without
+          # rows an admin cannot create or update any subtest at all. The rest
+          # degrade quietly - empty pickers, no follow-proof accounts.
+          for pair in \
+            "subtest-categories:SubtestCategorySeeder" \
+            "instagram:InstagramAccountSeeder" \
+            "kedinasan:KedinasanSeeder" \
+            "instansi:InstansiFormasiSeeder" ; do
+            marker="storage/.${pair%%:*}-seeded"
+            class="${pair##*:}"
+
+            if [ "$FRESH" != "true" ] && [ ! -f "$marker" ]; then
+              echo "--- db:seed --class=$class (one-off reference data)"
+              "$php_bin" artisan db:seed --class="$class" --force
+              touch "$marker"
+            fi
+          done
+
           echo "--- storage exposure"
           ls -ld public/storage storage/app/public 2>&1 || true
           if [ -L public/storage ]; then
