@@ -25,10 +25,17 @@ class SubtestController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $examType = $request->input('exam_type');
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255', 'unique:subtests,name'],
-            'category' => ['required', 'in:TPS,Literasi'],
             'exam_type' => ['required', 'in:utbk,cpns'],
+            'category' => [
+                'required',
+                'string',
+                Rule::exists('subtest_categories', 'code')
+                    ->where(fn ($query) => $query->where('exam_type', $examType)->where('is_active', true)),
+            ],
             'max_questions' => ['required', 'integer', 'min:1'],
             'scoring_scheme' => ['nullable', Rule::in([
                 ScoringService::SCHEME_IRT,
@@ -58,10 +65,17 @@ class SubtestController extends Controller
 
     public function update(Request $request, Subtest $subtest): JsonResponse
     {
+        $examType = $request->input('exam_type', $subtest->exam_type);
+
         $validated = $request->validate([
             'name'          => ['required', 'string', 'max:255', 'unique:subtests,name,' . $subtest->id],
-            'category'      => ['required', 'in:TPS,Literasi'],
             'exam_type'     => ['required', 'in:utbk,cpns'],
+            'category'      => [
+                'required',
+                'string',
+                Rule::exists('subtest_categories', 'code')
+                    ->where(fn ($query) => $query->where('exam_type', $examType)->where('is_active', true)),
+            ],
             'max_questions' => ['sometimes', 'integer', 'min:0'],
             'scoring_scheme' => ['nullable', Rule::in([
                 ScoringService::SCHEME_IRT,

@@ -819,7 +819,9 @@ class UserTryoutController extends Controller
         // bobot per opsi (TKP CPNS) ikut terhitung. Untuk subtes 1/0 hasilnya sama.
         $rawPoints = ScoringService::rawScoreForSession($session);
         $maxPoints = ScoringService::maxScoreForSession($session);
-        $simpleFinalScore = $maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0;
+        $isCpns = $tryout->kategori === 'cpns';
+        $simpleFinalScore = $isCpns ? $rawPoints : ($maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0);
+        $simpleMaxScore = $isCpns ? $maxPoints : 1000;
 
         $baseData = [
             'tryout_id' => $tryout->id,
@@ -841,6 +843,7 @@ class UserTryoutController extends Controller
                 'is_ready' => ! $tryout->use_irt,
                 'raw_score' => ! $tryout->use_irt ? round($rawPoints, 2) : 0,
                 'final_score' => ! $tryout->use_irt ? round($simpleFinalScore, 2) : 0,
+                'max_score' => ! $tryout->use_irt ? round($simpleMaxScore, 2) : 1000,
                 'accuracy' => round($accuracy, 2),
             ],
             // Rincian per subtest: peserta CPNS dinilai per ambang, dan satu
@@ -921,6 +924,7 @@ class UserTryoutController extends Controller
             'total_participants_calculated' => $isIrtReady ? $totalParticipants : 0,
             'raw_score' => $isIrtReady ? round($rawIrtScore, 2) : 0,
             'final_score' => $isIrtReady ? round($finalScore1000, 2) : 0,
+            'max_score' => 1000,
             'provisional_score' => $provisionalScore,
         ];
         $baseData['score_result'] = [
@@ -932,6 +936,7 @@ class UserTryoutController extends Controller
             'is_provisional' => ! $isIrtReady,
             'raw_score' => $isIrtReady ? round($rawIrtScore, 2) : round($rawPoints, 2),
             'final_score' => $isIrtReady ? round($finalScore1000, 2) : $provisionalScore,
+            'max_score' => $isIrtReady ? 1000 : round($simpleMaxScore, 2),
             'accuracy' => round($accuracy, 2),
         ];
 
@@ -1045,10 +1050,13 @@ class UserTryoutController extends Controller
                         ->where('is_correct', true)
                         ->sum(fn ($answer) => $questionWeights[$answer->question_id] ?? 0);
                     $finalScore = ($rawScore / $totalWeightAll) * 1000;
+                    $maxScore = 1000;
                 } else {
                     $rawScore = ScoringService::rawScoreForSession($session);
                     $maxPoints = ScoringService::maxScoreForSession($session);
-                    $finalScore = $maxPoints > 0 ? ($rawScore / $maxPoints) * 1000 : 0;
+                    $isCpns = $tryout->kategori === 'cpns';
+                    $finalScore = $isCpns ? $rawScore : ($maxPoints > 0 ? ($rawScore / $maxPoints) * 1000 : 0);
+                    $maxScore = $isCpns ? $maxPoints : 1000;
                 }
 
                 $row = [
@@ -1068,6 +1076,7 @@ class UserTryoutController extends Controller
                     'score' => [
                         'raw_score' => round($rawScore, 2),
                         'final_score' => round($finalScore, 2),
+                        'max_score' => round($maxScore, 2),
                     ],
                     'school_id' => $session->user?->school_id,
                     'school_name' => $session->user?->school_name,
@@ -1288,7 +1297,8 @@ class UserTryoutController extends Controller
         $accuracy = $totalQuestions > 0 ? ($correct / $totalQuestions) * 100 : 0;
         $rawPoints = ScoringService::rawScoreForSession($session);
         $maxPoints = ScoringService::maxScoreForSession($session);
-        $finalScore = $maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0;
+        $isCpns = $tryout->kategori === 'cpns';
+        $finalScore = $isCpns ? $rawPoints : ($maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0);
 
         return [
             'session_id' => $session->id,
@@ -1300,6 +1310,7 @@ class UserTryoutController extends Controller
             'score' => [
                 'raw_score' => round($rawPoints, 2),
                 'final_score' => round($finalScore, 2),
+                'max_score' => round($isCpns ? $maxPoints : 1000, 2),
                 'accuracy' => round($accuracy, 2),
             ],
             'summary' => [
