@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\AccessCodeController;
+use App\Http\Controllers\Api\AdminInstansiController;
 use App\Http\Controllers\Api\InstagramAccountController;
 use App\Http\Controllers\Api\InstansiController;
 use App\Http\Controllers\Api\AdminAccessCodeController;
@@ -156,6 +157,17 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::apiResource('subtests.questions', QuestionController::class);
         Route::post('/subtests/{subtest}/questions/bulk-import', [BulkImportQuestionController::class, 'store']);
         Route::get('/questions/bulk-import/excel-template', [BulkImportQuestionController::class, 'excelTemplate']);
+
+        // Instansi dan formasi. Rekap formasi resmi tidak tersedia dalam bentuk
+        // yang bisa diunduh, jadi tanpa endpoint ini formasi hanya bisa masuk
+        // lewat seeder di server.
+        Route::get('/instansi', [AdminInstansiController::class, 'index']);
+        Route::post('/instansi', [AdminInstansiController::class, 'storeInstansi']);
+        Route::put('/instansi/{instansi}', [AdminInstansiController::class, 'updateInstansi']);
+        Route::delete('/instansi/{instansi}', [AdminInstansiController::class, 'destroyInstansi']);
+        Route::get('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'formasi']);
+        Route::post('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'storeFormasi']);
+        Route::delete('/instansi/{instansi}/formasi/{formasi}', [AdminInstansiController::class, 'destroyFormasi']);
 
         Route::get('/instagram-accounts', [InstagramAccountController::class, 'adminIndex']);
         Route::post('/instagram-accounts', [InstagramAccountController::class, 'store']);
