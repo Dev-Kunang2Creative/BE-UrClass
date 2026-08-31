@@ -1,7 +1,10 @@
 <?php
 
 use App\Http\Controllers\Api\AccessCodeController;
-use App\Http\Controllers\Api\InstagramAccountController;
+use App\Http\Controllers\Api\AdminFormasiImportController;
+use App\Http\Controllers\Api\AdminInstansiController;
+use App\Http\Controllers\Api\ProofRequirementController;
+use App\Http\Controllers\Api\InstansiController;
 use App\Http\Controllers\Api\AdminAccessCodeController;
 use App\Http\Controllers\Api\AdminOrderController;
 use App\Http\Controllers\Api\AdminPackageController;
@@ -60,7 +63,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Dibaca halaman pendaftaran tryout gratis untuk menampilkan akun yang
     // harus di-follow sekaligus menentukan berapa bukti yang diminta.
-    Route::get('/instagram-accounts', [InstagramAccountController::class, 'index']);
+    Route::get('/proof-requirements', [ProofRequirementController::class, 'index']);
     Route::get('/subtests', [SubtestController::class, 'index']);
     Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
 
@@ -72,6 +75,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/perguruan-tinggi/{perguruanTinggi}/program-studi', [PerguruanTinggiController::class, 'programStudi']);
     Route::get('/program-studi/jenjang', [PerguruanTinggiController::class, 'jenjang']);
     Route::get('/program-studi', [PerguruanTinggiController::class, 'searchProgramStudi']);
+
+    // Target pelamar CPNS umum. Dua tingkat seperti kampus/prodi, supaya picker
+    // yang sama bisa dipakai untuk keduanya.
+    Route::get('/instansi', [InstansiController::class, 'index']);
+    Route::get('/instansi/{instansi}/formasi', [InstansiController::class, 'formasi']);
+    Route::get('/formasi', [InstansiController::class, 'searchFormasi']);
+    // Dipakai form profil untuk tahu apakah daftar formasi periode ini sudah
+    // terbit. Kalau belum, kolomnya diganti pemberitahuan alih-alih picker kosong.
+    Route::get('/formasi/status', [InstansiController::class, 'status']);
 
     // Package & Orders
     Route::apiResource('packages', PackageCatalogController::class)->only(['index', 'show']);
@@ -150,10 +162,30 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::post('/subtests/{subtest}/questions/bulk-import', [BulkImportQuestionController::class, 'store']);
         Route::get('/questions/bulk-import/excel-template', [BulkImportQuestionController::class, 'excelTemplate']);
 
-        Route::get('/instagram-accounts', [InstagramAccountController::class, 'adminIndex']);
-        Route::post('/instagram-accounts', [InstagramAccountController::class, 'store']);
-        Route::put('/instagram-accounts/{instagramAccount}', [InstagramAccountController::class, 'update']);
-        Route::delete('/instagram-accounts/{instagramAccount}', [InstagramAccountController::class, 'destroy']);
+        // Instansi dan formasi. Rekap formasi resmi tidak tersedia dalam bentuk
+        // yang bisa diunduh, jadi tanpa endpoint ini formasi hanya bisa masuk
+        // lewat seeder di server.
+        Route::get('/instansi', [AdminInstansiController::class, 'index']);
+        Route::post('/instansi', [AdminInstansiController::class, 'storeInstansi']);
+        Route::put('/instansi/{instansi}', [AdminInstansiController::class, 'updateInstansi']);
+        Route::delete('/instansi/{instansi}', [AdminInstansiController::class, 'destroyInstansi']);
+        Route::get('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'formasi']);
+        Route::post('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'storeFormasi']);
+        Route::delete('/instansi/{instansi}/formasi/{formasi}', [AdminInstansiController::class, 'destroyFormasi']);
+
+        // Impor massal. Satu periode seleksi bisa memuat ribuan formasi, jadi
+        // mengisinya lewat form per baris bukan pilihan yang masuk akal.
+        Route::post('/formasi/import', [AdminFormasiImportController::class, 'store']);
+        Route::get('/formasi/import/template', [AdminFormasiImportController::class, 'template']);
+
+        Route::get('/proof-requirements', [ProofRequirementController::class, 'adminIndex']);
+        Route::post('/proof-requirements', [ProofRequirementController::class, 'store']);
+        // Urutan ditetapkan sekaligus: menggeser satu syarat selalu mengubah
+        // posisi yang lain, jadi mengirimnya satu-satu melewati keadaan di mana
+        // dua baris punya urutan sama.
+        Route::put('/proof-requirements/reorder', [ProofRequirementController::class, 'reorder']);
+        Route::put('/proof-requirements/{proofRequirement}', [ProofRequirementController::class, 'update']);
+        Route::delete('/proof-requirements/{proofRequirement}', [ProofRequirementController::class, 'destroy']);
 
         // --- TRYOUT & PENGATURAN TRYOUT ---
         Route::get('/tryouts/{tryout}/participants', [TryoutController::class, 'participants']);

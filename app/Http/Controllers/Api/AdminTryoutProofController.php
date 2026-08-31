@@ -41,6 +41,14 @@ class AdminTryoutProofController extends Controller
                 ->filter()
                 ->values();
 
+            // Judul syarat per berkas, kalau pendaftarannya menyimpannya.
+            // Pendaftaran lama tidak punya keterangan ini - urutannya satu-satunya
+            // yang tersimpan - jadi antarmuka jatuh ke penomoran biasa untuk
+            // baris itu, bukan menebak syarat mana yang berlaku saat itu.
+            $titleByPath = collect($access->proof_details ?: [])
+                ->filter(fn ($item) => ! empty($item['path']))
+                ->mapWithKeys(fn ($item) => [$item['path'] => $item['title'] ?? null]);
+
             return [
                 'id' => $access->id,
                 'granted_at' => $access->granted_at,
@@ -53,6 +61,12 @@ class AdminTryoutProofController extends Controller
                 'proof_images' => $proofImages->all(),
                 'proof_image_urls' => $proofImages
                     ->map(fn ($path) => asset(Storage::disk('public')->url($path)))
+                    ->all(),
+                'proof_items' => $proofImages
+                    ->map(fn ($path) => [
+                        'title' => $titleByPath[$path] ?? null,
+                        'url' => asset(Storage::disk('public')->url($path)),
+                    ])
                     ->all(),
             ];
         });
