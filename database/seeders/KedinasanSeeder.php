@@ -56,7 +56,7 @@ class KedinasanSeeder extends Seeder
             if (! isset($seen[$kodeSekolah])) {
                 $school = PerguruanTinggi::updateOrCreate(
                     ['kode_ptn' => trim($kodeSekolah)],
-                    ['nama' => Str::title(trim($namaSekolah)), 'jenis' => 'kedinasan'],
+                    ['nama' => self::properName($namaSekolah), 'jenis' => 'kedinasan'],
                 );
                 $seen[$kodeSekolah] = $school->id;
                 $sekolah++;
@@ -67,7 +67,7 @@ class KedinasanSeeder extends Seeder
                     ['kode_prodi' => trim($kodeProdi)],
                     [
                         'perguruan_tinggi_id' => $seen[$kodeSekolah],
-                        'nama' => Str::title(trim($namaProdi)),
+                        'nama' => self::properName($namaProdi),
                         'jenjang' => trim((string) $jenjang) ?: 'Diploma',
                     ],
                 );
@@ -77,5 +77,21 @@ class KedinasanSeeder extends Seeder
 
         fclose($handle);
         $this->command?->info("  kedinasan: {$sekolah} sekolah, {$prodi} program studi");
+    }
+
+    /**
+     * Nama apa adanya kalau sudah berkapitalisasi wajar; di-title-case kalau
+     * sumbernya huruf besar semua.
+     *
+     * CSV PTN dari SNPMB seluruhnya kapital ("UNIVERSITAS SYIAH KUALA") sehingga
+     * butuh dirapikan, sementara berkas kedinasan sudah tertulis benar. Menerapkan
+     * Str::title() tanpa syarat merusak yang kedua: "dan" jadi "Dan", dan nama
+     * resmi jadi salah tulis.
+     */
+    private static function properName(string $value): string
+    {
+        $value = trim($value);
+
+        return $value === mb_strtoupper($value) ? Str::title($value) : $value;
     }
 }
