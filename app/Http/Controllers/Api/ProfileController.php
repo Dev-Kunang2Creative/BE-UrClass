@@ -34,9 +34,23 @@ class ProfileController extends Controller
 
         $profileRequired = $isAdmin ? 'nullable' : 'required';
 
-        $targetRequired = $isAdmin || ($user->kategori ?? 'utbk') !== 'utbk'
-            ? 'nullable'
-            : 'required';
+        $kategori = $user->kategori ?? 'utbk';
+        $isUtbk = $kategori === 'utbk';
+        $isCpns = $kategori === 'cpns';
+
+        $targetRequired = $isAdmin || ! $isUtbk ? 'nullable' : 'required';
+
+        // Peserta CPNS punya dua bentuk target, dan yang wajib diisi tergantung
+        // sub-jalur yang ia pilih: pelamar sekolah kedinasan mengisi sekolah dan
+        // program studi, pelamar CPNS umum mengisi instansi dan formasi. Meminta
+        // keduanya berarti meminta salah satu diisi asal-asalan.
+        $cpnsType = $request->input('cpns_target_type');
+        $kedinasanRequired = ! $isAdmin && $isCpns && $cpnsType === 'kedinasan'
+            ? 'required'
+            : 'nullable';
+        $umumRequired = ! $isAdmin && $isCpns && $cpnsType === 'umum'
+            ? 'required'
+            : 'nullable';
 
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'], 
@@ -56,10 +70,19 @@ class ProfileController extends Controller
             // A CPNS candidate has no target campus, and requiring one meant
             // they could not save a profile without inventing a university.
             // Sama halnya dengan admin, yang tidak punya target kampus apa pun.
-            'target_university_1' => [$targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
-            'target_major_1' => [$targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            // Kolom yang sama menampung target PTN (UTBK) dan sekolah kedinasan
+            // (CPNS): keduanya berbentuk sekolah plus program studi, jadi tidak
+            // ada gunanya membuat pasangan kolom kedua yang isinya sejenis.
+            'target_university_1' => [$isCpns ? $kedinasanRequired : $targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'target_major_1' => [$isCpns ? $kedinasanRequired : $targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'target_university_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'target_major_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+
+            'cpns_target_type' => [$isCpns && ! $isAdmin ? 'required' : 'nullable', 'in:kedinasan,umum'],
+            'target_instansi_1' => [$umumRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'target_formasi_1' => [$umumRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'target_instansi_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'target_formasi_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
         ], [
             'name.regex' => 'Nama tidak boleh mengandung tag HTML atau karakter script.',
             'phone_number.regex' => 'Format nomor telepon tidak valid.',
@@ -69,6 +92,9 @@ class ProfileController extends Controller
             'target_major_1.regex' => 'Pilihan jurusan tidak boleh mengandung tag HTML.',
             'target_university_2.regex' => 'Pilihan universitas tidak boleh mengandung tag HTML.',
             'target_major_2.regex' => 'Pilihan jurusan tidak boleh mengandung tag HTML.',
+            'cpns_target_type.required' => 'Pilih dulu tujuanmu: sekolah kedinasan atau CPNS umum.',
+            'target_instansi_1.required' => 'Instansi tujuan wajib diisi.',
+            'target_formasi_1.required' => 'Formasi tujuan wajib diisi.',
         ]);
 
         $sanitized = array_map(function ($value) {

@@ -16,7 +16,18 @@ class PerguruanTinggi extends Model
     protected $fillable = [
         'kode_ptn',
         'nama',
+        'jenis',
     ];
+
+    /**
+     * Sekolah kedinasan memakai tabel yang sama karena bentuk targetnya identik
+     * dengan PTN - sekolah plus program studi - jadi picker, endpoint, dan kolom
+     * profil yang sudah ada bisa dipakai apa adanya. Yang membedakan hanya jenis.
+     */
+    public function scopeJenis($query, ?string $jenis)
+    {
+        return $jenis ? $query->where('jenis', $jenis) : $query;
+    }
 
     public function programStudi()
     {

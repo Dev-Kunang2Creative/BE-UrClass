@@ -31,6 +31,14 @@ class User extends Authenticatable
         'target_major_1',
         'target_university_2',
         'target_major_2',
+        // Target jalur CPNS. Sekolah kedinasan memakai target_university_* dan
+        // target_major_* di atas karena bentuknya sama dengan target PTN;
+        // pelamar CPNS umum memakai instansi dan formasi di bawah.
+        'cpns_target_type',
+        'target_instansi_1',
+        'target_formasi_1',
+        'target_instansi_2',
+        'target_formasi_2',
         'ticket_balance',
     ];
 

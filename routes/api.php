@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AccessCodeController;
 use App\Http\Controllers\Api\InstagramAccountController;
+use App\Http\Controllers\Api\InstansiController;
 use App\Http\Controllers\Api\AdminAccessCodeController;
 use App\Http\Controllers\Api\AdminOrderController;
 use App\Http\Controllers\Api\AdminPackageController;
@@ -72,6 +73,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/perguruan-tinggi/{perguruanTinggi}/program-studi', [PerguruanTinggiController::class, 'programStudi']);
     Route::get('/program-studi/jenjang', [PerguruanTinggiController::class, 'jenjang']);
     Route::get('/program-studi', [PerguruanTinggiController::class, 'searchProgramStudi']);
+
+    // Target pelamar CPNS umum. Dua tingkat seperti kampus/prodi, supaya picker
+    // yang sama bisa dipakai untuk keduanya.
+    Route::get('/instansi', [InstansiController::class, 'index']);
+    Route::get('/instansi/{instansi}/formasi', [InstansiController::class, 'formasi']);
+    Route::get('/formasi', [InstansiController::class, 'searchFormasi']);
 
     // Package & Orders
     Route::apiResource('packages', PackageCatalogController::class)->only(['index', 'show']);
