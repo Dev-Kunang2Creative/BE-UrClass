@@ -24,9 +24,9 @@ class SubtestSeeder extends Seeder
             ['name' => 'Literasi dalam Bahasa Inggris',     'category' => 'Literasi','exam_type' => 'utbk', 'max_questions' => 20],
             ['name' => 'Penalaran Matematika',              'category' => 'Literasi','exam_type' => 'utbk', 'max_questions' => 20],
             // CPNS
-            ['name' => 'Tes Wawasan Kebangsaan (TWK)',      'category' => 'TPS',     'exam_type' => 'cpns', 'max_questions' => 30],
-            ['name' => 'Tes Intelegensi Umum (TIU)',        'category' => 'TPS',     'exam_type' => 'cpns', 'max_questions' => 35],
-            ['name' => 'Tes Karakteristik Pribadi (TKP)',   'category' => 'TPS',     'exam_type' => 'cpns', 'max_questions' => 45],
+            ['name' => 'Tes Wawasan Kebangsaan (TWK)',      'category' => 'TWK',     'exam_type' => 'cpns', 'max_questions' => 30],
+            ['name' => 'Tes Intelegensi Umum (TIU)',        'category' => 'TIU',     'exam_type' => 'cpns', 'max_questions' => 35],
+            ['name' => 'Tes Karakteristik Pribadi (TKP)',   'category' => 'TKP',     'exam_type' => 'cpns', 'max_questions' => 45],
         ];
 
         foreach ($items as $item) {

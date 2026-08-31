@@ -23,6 +23,7 @@ use App\Http\Controllers\Api\AdminSalesReportController;
 use App\Http\Controllers\Api\AdminTicketRedeemCodeController;
 use App\Http\Controllers\Api\AdminTryoutProofController;
 use App\Http\Controllers\Api\BulkImportQuestionController;
+use App\Http\Controllers\Api\SubtestCategoryController;
 use App\Http\Controllers\Api\TicketLogController;
 use Illuminate\Support\Facades\Route;
 
@@ -61,6 +62,7 @@ Route::middleware('auth:sanctum')->group(function () {
     // harus di-follow sekaligus menentukan berapa bukti yang diminta.
     Route::get('/instagram-accounts', [InstagramAccountController::class, 'index']);
     Route::get('/subtests', [SubtestController::class, 'index']);
+    Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
 
     // Reference data for the target-campus pickers. Read-only; refreshed by
     // reseeding, never through the API. /program-studi/jenjang is declared
@@ -137,6 +139,12 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::delete('/users/{user}', [AdminUserController::class, 'destroy']);
 
         // --- SUBTEST & MASTER SOAL ---
+        Route::get('/subtest-categories', [SubtestCategoryController::class, 'adminIndex']);
+        Route::post('/subtest-categories', [SubtestCategoryController::class, 'store']);
+        Route::put('/subtest-categories/{subtestCategory}', [SubtestCategoryController::class, 'update']);
+        Route::patch('/subtest-categories/{subtestCategory}/toggle-active', [SubtestCategoryController::class, 'toggleActive']);
+        Route::delete('/subtest-categories/{subtestCategory}', [SubtestCategoryController::class, 'destroy']);
+
         Route::apiResource('subtests', SubtestController::class)->except(['index']);
         Route::apiResource('subtests.questions', QuestionController::class);
         Route::post('/subtests/{subtest}/questions/bulk-import', [BulkImportQuestionController::class, 'store']);

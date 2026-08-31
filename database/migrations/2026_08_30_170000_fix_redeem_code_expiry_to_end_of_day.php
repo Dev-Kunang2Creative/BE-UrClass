@@ -18,6 +18,18 @@ return new class extends Migration
 {
     public function up(): void
     {
+        if (DB::getDriverName() === 'sqlite') {
+            DB::table('ticket_redeem_codes')
+                ->whereNotNull('expired_at')
+                ->whereRaw("strftime('%H:%M:%S', expired_at) = ?", ['00:00:00'])
+                ->get()
+                ->each(function ($row) {
+                    $date = \Carbon\Carbon::parse($row->expired_at)->endOfDay();
+                    DB::table('ticket_redeem_codes')->where('id', $row->id)->update(['expired_at' => $date]);
+                });
+            return;
+        }
+
         DB::table('ticket_redeem_codes')
             ->whereNotNull('expired_at')
             ->whereRaw('TIME(expired_at) = ?', ['00:00:00'])
@@ -28,6 +40,18 @@ return new class extends Migration
 
     public function down(): void
     {
+        if (DB::getDriverName() === 'sqlite') {
+            DB::table('ticket_redeem_codes')
+                ->whereNotNull('expired_at')
+                ->whereRaw("strftime('%H:%M:%S', expired_at) = ?", ['23:59:59'])
+                ->get()
+                ->each(function ($row) {
+                    $date = \Carbon\Carbon::parse($row->expired_at)->startOfDay();
+                    DB::table('ticket_redeem_codes')->where('id', $row->id)->update(['expired_at' => $date]);
+                });
+            return;
+        }
+
         DB::table('ticket_redeem_codes')
             ->whereNotNull('expired_at')
             ->whereRaw('TIME(expired_at) = ?', ['23:59:59'])
