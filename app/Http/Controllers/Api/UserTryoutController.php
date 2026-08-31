@@ -5,7 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\TicketLog;
 use App\Models\Tryout;
-use App\Models\InstagramAccount;
+use App\Models\ProofRequirement;
 use App\Models\Question;
 use App\Models\TryoutSession;
 use App\Models\TryoutSubtest;
@@ -169,25 +169,51 @@ class UserTryoutController extends Controller
         // --- JIKA TRYOUT GRATIS ---
         if ($tryout->is_free) {
             
-            // Satu bukti untuk satu akun yang wajib di-follow. Angkanya dulu
-            // dipatok 2 - kebetulan cocok karena akunnya memang dua - sehingga
-            // menambah akun ketiga diam-diam tetap meloloskan dua bukti saja.
-            $requiredProofs = max(1, InstagramAccount::active()->count());
-            $maxProofs = max($requiredProofs, 5);
+            // Satu unggahan untuk satu syarat, dan syaratnya diambil dari tabel
+            // - bukan dipatok di sini. Dulu jumlahnya diturunkan dari jumlah akun
+            // Instagram aktif, yang hanya masuk akal selama syaratnya memang
+            // hanya follow. Sekarang syaratnya bisa follow, tag teman, atau
+            // bagikan ke story, dan masing-masing punya slotnya sendiri.
+            $requirements = ProofRequirement::active()->get();
 
-            $validator = Validator::make($request->all(), [
-                'proof_images' => ['required', 'array', "min:{$requiredProofs}", "max:{$maxProofs}"],
-                'proof_images.*' => ['required', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
-            ], [
-                'proof_images.required' => 'Bukti follow Instagram wajib diunggah untuk mengikuti tryout gratis.',
-                'proof_images.array' => 'Bukti follow harus dikirim sebagai daftar gambar.',
-                'proof_images.min' => "Minimal unggah {$requiredProofs} bukti follow Instagram, satu untuk tiap akun.",
-                'proof_images.max' => "Maksimal unggah {$maxProofs} bukti follow Instagram.",
-                'proof_images.*.required' => 'Setiap bukti follow wajib berupa gambar.',
-                'proof_images.*.image' => 'Setiap bukti harus berupa gambar.',
-                'proof_images.*.mimes' => 'Format gambar harus jpeg, png, jpg, atau webp.',
-                'proof_images.*.max' => 'Ukuran setiap gambar maksimal 2MB.',
-            ]);
+            $rules = [];
+            $messages = [];
+
+            foreach ($requirements as $requirement) {
+                $field = "proofs.{$requirement->id}";
+                $rules[$field] = ['required', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'];
+
+                // Pesannya menyebut judul syaratnya, bukan nomor slot. Peserta
+                // yang melewatkan satu unggahan perlu tahu yang mana, dan
+                // "bukti ke-2" tidak menjawab itu.
+                $messages["{$field}.required"] = "Bukti untuk \"{$requirement->title}\" wajib diunggah.";
+                $messages["{$field}.image"] = "Bukti untuk \"{$requirement->title}\" harus berupa gambar.";
+                $messages["{$field}.mimes"] = "Bukti untuk \"{$requirement->title}\" harus berformat jpeg, png, jpg, atau webp.";
+                $messages["{$field}.max"] = "Bukti untuk \"{$requirement->title}\" maksimal 2MB.";
+            }
+
+            // Berkas yang akan dipakai, dari satu sumber saja. Divalidasi dan
+            // disimpan dari variabel yang sama supaya tidak mungkin lolos
+            // validasi lalu ternyata kosong saat disimpan.
+            $uploaded = collect($request->file('proofs', []))->filter()->all();
+
+            // Jalur mundur untuk tab yang masih memuat versi lama antarmuka.
+            // Bentuk lamanya mengirim proof_images[] tanpa keterangan syarat, dan
+            // urutannya satu-satunya petunjuk yang ada - jadi dipetakan berurutan
+            // ke syarat aktif. Tanpa ini, siapa pun yang membuka dialog
+            // pendaftaran sebelum deploy gagal mendaftar dengan pesan yang
+            // menyebut slot yang tidak ada di layarnya.
+            if ($uploaded === []) {
+                $legacyFiles = collect($request->file('proof_images', []))->filter()->values();
+
+                foreach ($requirements->values() as $index => $requirement) {
+                    if ($file = $legacyFiles->get($index)) {
+                        $uploaded[$requirement->id] = $file;
+                    }
+                }
+            }
+
+            $validator = Validator::make(['proofs' => $uploaded], $rules, $messages);
 
             if ($validator->fails()) {
                 return response()->json([
@@ -196,17 +222,36 @@ class UserTryoutController extends Controller
                 ], 422);
             }
 
-            $proofPaths = collect($request->file('proof_images', []))
-                ->map(fn ($file) => $file->store('proof-images', 'public'))
-                ->values()
-                ->all();
+            $proofPaths = [];
+            $proofDetails = [];
 
-            DB::transaction(function () use ($user, $tryout, $proofPaths) {
+            foreach ($requirements as $requirement) {
+                $file = $uploaded[$requirement->id] ?? null;
+
+                if (! $file) {
+                    continue;
+                }
+
+                $path = $file->store('proof-images', 'public');
+                $proofPaths[] = $path;
+
+                // Judulnya ikut disimpan, bukan hanya id-nya. Syarat bisa diubah
+                // atau dihapus admin setelah pendaftaran masuk, dan bukti lama
+                // tetap harus bisa dibaca apa maksudnya saat ditinjau.
+                $proofDetails[] = [
+                    'requirement_id' => $requirement->id,
+                    'title' => $requirement->title,
+                    'path' => $path,
+                ];
+            }
+
+            DB::transaction(function () use ($user, $tryout, $proofPaths, $proofDetails) {
                 UserTryoutAccess::create([
                     'user_id' => $user->id,
                     'tryout_id' => $tryout->id,
                     'proof_image' => $proofPaths[0] ?? null,
                     'proof_images' => $proofPaths,
+                    'proof_details' => $proofDetails,
                     'granted_at' => now(),
                 ]);
             });

@@ -287,7 +287,7 @@ jobs:
           # degrade quietly - empty pickers, no follow-proof accounts.
           for pair in \
             "subtest-categories:SubtestCategorySeeder" \
-            "instagram:InstagramAccountSeeder" \
+            "proof-requirements:ProofRequirementSeeder" \
             "kedinasan:KedinasanSeeder" \
             "instansi:InstansiFormasiSeeder" ; do
             marker="storage/.${pair%%:*}-seeded"

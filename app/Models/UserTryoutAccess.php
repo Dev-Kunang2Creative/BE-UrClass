@@ -40,6 +40,7 @@ class UserTryoutAccess extends Model
         'access_code_id',
         'proof_image',
         'proof_images',
+        'proof_details',
         'discussion_unlocked',
         'granted_at',
         'selection_status',
@@ -51,6 +52,9 @@ class UserTryoutAccess extends Model
     protected $casts = [
         'granted_at' => 'datetime',
         'proof_images' => 'array',
+        // Pasangan syarat dan berkasnya, supaya saat ditinjau kelihatan
+        // tangkapan layar mana yang menjawab syarat mana.
+        'proof_details' => 'array',
         'discussion_unlocked' => 'boolean',
         'selection_reviewed_at' => 'datetime',
     ];

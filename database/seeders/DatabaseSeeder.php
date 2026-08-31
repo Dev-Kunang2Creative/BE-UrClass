@@ -19,7 +19,7 @@ class DatabaseSeeder extends Seeder
             CpnsContentSeeder::class,
             CpnsQuestionSeeder::class,
             PerguruanTinggiSeeder::class,
-            InstagramAccountSeeder::class,
+            ProofRequirementSeeder::class,
             KedinasanSeeder::class,
             InstansiFormasiSeeder::class,
         ]);

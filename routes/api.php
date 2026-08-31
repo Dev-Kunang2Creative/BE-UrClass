@@ -3,7 +3,7 @@
 use App\Http\Controllers\Api\AccessCodeController;
 use App\Http\Controllers\Api\AdminFormasiImportController;
 use App\Http\Controllers\Api\AdminInstansiController;
-use App\Http\Controllers\Api\InstagramAccountController;
+use App\Http\Controllers\Api\ProofRequirementController;
 use App\Http\Controllers\Api\InstansiController;
 use App\Http\Controllers\Api\AdminAccessCodeController;
 use App\Http\Controllers\Api\AdminOrderController;
@@ -63,7 +63,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Dibaca halaman pendaftaran tryout gratis untuk menampilkan akun yang
     // harus di-follow sekaligus menentukan berapa bukti yang diminta.
-    Route::get('/instagram-accounts', [InstagramAccountController::class, 'index']);
+    Route::get('/proof-requirements', [ProofRequirementController::class, 'index']);
     Route::get('/subtests', [SubtestController::class, 'index']);
     Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
 
@@ -178,10 +178,14 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::post('/formasi/import', [AdminFormasiImportController::class, 'store']);
         Route::get('/formasi/import/template', [AdminFormasiImportController::class, 'template']);
 
-        Route::get('/instagram-accounts', [InstagramAccountController::class, 'adminIndex']);
-        Route::post('/instagram-accounts', [InstagramAccountController::class, 'store']);
-        Route::put('/instagram-accounts/{instagramAccount}', [InstagramAccountController::class, 'update']);
-        Route::delete('/instagram-accounts/{instagramAccount}', [InstagramAccountController::class, 'destroy']);
+        Route::get('/proof-requirements', [ProofRequirementController::class, 'adminIndex']);
+        Route::post('/proof-requirements', [ProofRequirementController::class, 'store']);
+        // Urutan ditetapkan sekaligus: menggeser satu syarat selalu mengubah
+        // posisi yang lain, jadi mengirimnya satu-satu melewati keadaan di mana
+        // dua baris punya urutan sama.
+        Route::put('/proof-requirements/reorder', [ProofRequirementController::class, 'reorder']);
+        Route::put('/proof-requirements/{proofRequirement}', [ProofRequirementController::class, 'update']);
+        Route::delete('/proof-requirements/{proofRequirement}', [ProofRequirementController::class, 'destroy']);
 
         // --- TRYOUT & PENGATURAN TRYOUT ---
         Route::get('/tryouts/{tryout}/participants', [TryoutController::class, 'participants']);
