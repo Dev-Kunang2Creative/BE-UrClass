@@ -5,8 +5,11 @@ namespace App\Services;
 use App\Models\Question;
 use App\Models\QuestionOption;
 use App\Models\Subtest;
+use App\Models\Tryout;
 use App\Models\TryoutSession;
 use App\Models\UserAnswer;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 
 /**
  * ScoringService — implementasi 3 skema penilaian BRD v1.3 (A-07).
@@ -138,24 +141,52 @@ class ScoringService
      * Skor maksimum satu sesi: jumlah nilai tertinggi tiap soal yang diujikan.
      * Dipakai sebagai penyebut agar skala 0-1000 tetap benar saat satu soal
      * bernilai lebih dari 1 (TKP).
+     *
+     * Nilainya sifat tryout, bukan sifat sesi - dua peserta di tryout yang sama
+     * punya penyebut yang sama. Karena itu pemanggil yang mengolah banyak sesi
+     * sekaligus sebaiknya memanggil maxScoreForTryout() sekali di luar loop;
+     * memanggil yang ini per sesi berarti mengulang pekerjaan yang sama sebanyak
+     * jumlah peserta.
      */
     public static function maxScoreForSession(TryoutSession $session): float
     {
-        $subtestIds = $session->tryout
-            ?->tryoutSubtests()
+        return $session->tryout ? self::maxScoreForTryout($session->tryout) : 0.0;
+    }
+
+    /**
+     * Skor maksimum satu tryout: penyebut yang sama untuk seluruh pesertanya.
+     *
+     * Sebelumnya isi metode ini berada di maxScoreForSession dan mengambil soal
+     * satu kueri per subtest. Karena papan peringkat memanggilnya sekali per
+     * sesi, satu tryout tujuh subtest dengan seribu peserta berarti ribuan kueri
+     * yang seluruhnya menghasilkan angka yang sama. Sekarang seluruh soal
+     * diambil dalam satu kueri, dan pemanggilnya cukup sekali.
+     */
+    public static function maxScoreForTryout(Tryout $tryout): float
+    {
+        $subtestIds = $tryout->tryoutSubtests()
             ->where('is_active', true)
-            ->pluck('subtest_id') ?? collect();
+            ->pluck('subtest_id');
 
         if ($subtestIds->isEmpty()) {
             return 0.0;
         }
 
+        $subtests = Subtest::whereIn('id', $subtestIds)->get()->keyBy('id');
+
+        $questionsBySubtest = Question::whereIn('subtest_id', $subtestIds)
+            ->where('is_active', true)
+            ->get()
+            ->groupBy('subtest_id');
+
         $total = 0.0;
 
-        foreach (Subtest::whereIn('id', $subtestIds)->get() as $subtest) {
-            $questions = Question::where('subtest_id', $subtest->id)
-                ->where('is_active', true)
-                ->get();
+        foreach ($questionsBySubtest as $subtestId => $questions) {
+            $subtest = $subtests->get($subtestId);
+
+            if (! $subtest) {
+                continue;
+            }
 
             foreach ($questions as $question) {
                 $total += self::maxScoreForQuestion($question, $subtest);
@@ -163,6 +194,77 @@ class ScoringService
         }
 
         return $total;
+    }
+
+    /**
+     * Agregat jawaban per sesi, dalam satu kueri untuk banyak sesi sekaligus.
+     *
+     * Papan peringkat sebelumnya memuat seluruh jawaban tiap sesi sebagai model
+     * Eloquent hanya untuk menghitungnya - enam puluh peserta dengan sembilan
+     * puluh soal berarti 5.400 model dihidrasi, dan hidrasi itulah yang memakan
+     * waktu, bukan kuerinya. Angka yang dibutuhkan bisa dihitung database.
+     *
+     * @param  iterable<string>  $sessionIds
+     * @return array<string, array{answered: int, correct: int, wrong: int, raw_score: float}>
+     */
+    public static function sessionAggregates(iterable $sessionIds): array
+    {
+        $ids = collect($sessionIds)->filter()->unique()->values();
+
+        if ($ids->isEmpty()) {
+            return [];
+        }
+
+        return UserAnswer::query()
+            ->whereIn('tryout_session_id', $ids)
+            ->selectRaw('tryout_session_id as sid')
+            ->selectRaw('SUM(CASE WHEN answer IS NOT NULL THEN 1 ELSE 0 END) as answered')
+            ->selectRaw('SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct')
+            ->selectRaw('SUM(CASE WHEN is_correct = 0 THEN 1 ELSE 0 END) as wrong')
+            ->selectRaw('COALESCE(SUM(score), 0) as raw_score')
+            ->groupBy('tryout_session_id')
+            ->get()
+            ->mapWithKeys(fn ($row) => [(string) $row->sid => [
+                'answered' => (int) $row->answered,
+                'correct' => (int) $row->correct,
+                'wrong' => (int) $row->wrong,
+                'raw_score' => (float) $row->raw_score,
+            ]])
+            ->all();
+    }
+
+    /**
+     * Skor mentah IRT per sesi: jumlah bobot soal yang dijawab benar.
+     *
+     * Hanya pasangan (sesi, soal) untuk jawaban benar yang diambil, dan sebagai
+     * baris mentah tanpa hidrasi model - yang dibutuhkan cuma dua kolom.
+     *
+     * @param  iterable<string>  $sessionIds
+     * @param  array<string, float>  $weights
+     * @return array<string, float>
+     */
+    public static function irtRawScores(iterable $sessionIds, array $weights): array
+    {
+        $ids = collect($sessionIds)->filter()->unique()->values();
+
+        if ($ids->isEmpty() || $weights === []) {
+            return [];
+        }
+
+        $rows = UserAnswer::query()
+            ->whereIn('tryout_session_id', $ids)
+            ->where('is_correct', true)
+            ->toBase()
+            ->get(['tryout_session_id', 'question_id']);
+
+        $scores = [];
+
+        foreach ($rows as $row) {
+            $sid = (string) $row->tryout_session_id;
+            $scores[$sid] = ($scores[$sid] ?? 0.0) + ($weights[(string) $row->question_id] ?? 0.0);
+        }
+
+        return $scores;
     }
 
     /**
@@ -205,10 +307,16 @@ class ScoringService
 
         $out = [];
 
+        // Seluruh soal dalam satu kueri, dikelompokkan di PHP. Sebelumnya satu
+        // kueri per subtest, dan satu tryout bisa punya tujuh subtest - biaya
+        // yang muncul di setiap pembukaan halaman hasil.
+        $questionsBySubtest = Question::whereIn('subtest_id', $subtestIds)
+            ->where('is_active', true)
+            ->get()
+            ->groupBy('subtest_id');
+
         foreach (Subtest::whereIn('id', $subtestIds)->get() as $subtest) {
-            $questions = Question::where('subtest_id', $subtest->id)
-                ->where('is_active', true)
-                ->get();
+            $questions = $questionsBySubtest->get($subtest->id) ?? collect();
 
             $max = 0.0;
             foreach ($questions as $question) {
@@ -319,5 +427,96 @@ class ScoringService
             ->all();
 
         return self::validateOptionWeights($scores) !== null;
+    }
+
+    /**
+     * Bobot IRT setiap soal dalam satu tryout, dihitung sekali.
+     *
+     * Bobotnya diturunkan dari proporsi peserta yang menjawab benar: makin
+     * sedikit yang benar, makin berat soalnya. Karena itu nilainya **sifat
+     * tryout, bukan sifat peserta** - dua peserta yang berbeda menghasilkan
+     * bobot yang sama persis.
+     *
+     * Sebelumnya perhitungan ini ada dua kali - di halaman hasil dan di papan
+     * peringkat - dan masing-masing melakukan satu kueri COUNT per soal di dalam
+     * loop. Untuk tryout 90 soal itu 90 kueri, setiap kali salah satu halaman
+     * dibuka, oleh setiap peserta. Sekarang jumlah benar per soal diambil dalam
+     * satu kueri teragregasi, jadi biayanya tidak lagi tumbuh mengikuti jumlah
+     * soal.
+     *
+     * Hasilnya di-cache dengan kunci yang memuat jumlah sesi selesai, sehingga
+     * batal dengan sendirinya begitu ada peserta baru menyelesaikan tryout -
+     * tidak ada langkah pembatalan cache yang bisa terlupa. Efek sampingnya
+     * justru diinginkan: selama satu jendela cache, halaman hasil dan papan
+     * peringkat pasti memakai bobot yang identik.
+     *
+     * Menerima array maupun Collection karena kedua pemanggilnya menyusun daftar
+     * subtes dengan cara berbeda, dan memaksa salah satunya berubah bentuk hanya
+     * memindahkan konversinya ke tempat yang lebih mudah terlupa.
+     *
+     * @param  iterable<int|string>  $subtestIds
+     * @return array{weights: array<string, float>, total: float, participants: int}
+     */
+    public static function irtWeights(Tryout $tryout, iterable $subtestIds): array
+    {
+        $ids = collect($subtestIds)->filter()->unique()->sort()->values()->all();
+
+        $participants = TryoutSession::where('tryout_id', $tryout->id)
+            ->where('status', 'finished')
+            ->count();
+
+        if ($participants < 1 || $ids === []) {
+            return ['weights' => [], 'total' => 0.0, 'participants' => $participants];
+        }
+
+        $key = sprintf(
+            'irt-weights:%s:%d:%s',
+            $tryout->id,
+            $participants,
+            md5(implode(',', $ids)),
+        );
+
+        // TTL pendek sebagai jaring pengaman: jumlah sesi selesai menangkap
+        // hampir semua perubahan, tetapi tidak menangkap koreksi jawaban yang
+        // dilakukan tanpa menambah sesi. Lima menit membatasi seberapa lama
+        // bobot basi bisa terpakai.
+        return Cache::remember($key, now()->addMinutes(5), function () use ($tryout, $ids, $participants) {
+            $questionIds = Question::whereIn('subtest_id', $ids)
+                ->where('is_active', true)
+                ->pluck('id');
+
+            if ($questionIds->isEmpty()) {
+                return ['weights' => [], 'total' => 0.0, 'participants' => $participants];
+            }
+
+            // Satu kueri untuk seluruh soal, menggantikan satu kueri per soal.
+            // Join dipakai alih-alih whereHas karena whereHas menghasilkan
+            // subquery berkorelasi yang dievaluasi ulang per baris.
+            $correctCounts = UserAnswer::query()
+                ->join('tryout_sessions', 'tryout_sessions.id', '=', 'user_answers.tryout_session_id')
+                ->where('tryout_sessions.tryout_id', $tryout->id)
+                ->where('tryout_sessions.status', 'finished')
+                ->where('user_answers.is_correct', true)
+                ->whereIn('user_answers.question_id', $questionIds)
+                ->groupBy('user_answers.question_id')
+                ->pluck(DB::raw('count(*)'), 'user_answers.question_id');
+
+            $weights = [];
+            $total = 0.0;
+
+            foreach ($questionIds as $questionId) {
+                // Soal yang tidak dijawab benar oleh siapa pun tidak muncul di
+                // hasil agregasi, dan justru itu soal terberatnya - jadi
+                // bawaannya nol, bukan dilewati.
+                $p = ((int) ($correctCounts[$questionId] ?? 0)) / $participants;
+                $safeP = $p <= 0 ? 0.0001 : ($p >= 1 ? 0.9999 : $p);
+                $weight = max(1, log((1 - $safeP) / $safeP) + 2);
+
+                $weights[(string) $questionId] = $weight;
+                $total += $weight;
+            }
+
+            return ['weights' => $weights, 'total' => $total, 'participants' => $participants];
+        });
     }
 }

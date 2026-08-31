@@ -345,21 +345,40 @@ class UserTryoutController extends Controller
             ->where('is_published', true)
             ->get();
 
-        $finishedSessionsByTryout = TryoutSession::with('answers')
-            ->where('user_id', $user->id)
+        // Jawaban tidak di-eager-load: yang dibutuhkan riwayat percobaan hanya
+        // agregatnya, dan itu dihitung database sekali untuk seluruh sesi.
+        $finishedSessions = TryoutSession::where('user_id', $user->id)
             ->whereIn('tryout_id', $tryoutIds)
             ->where('status', 'finished')
             ->orderByDesc('finished_at')
             ->orderByDesc('created_at')
-            ->get()
-            ->groupBy('tryout_id');
+            ->get();
 
-        $tryouts->each(function ($tryout) use ($user, $sessionsByTryout, $sessionCountsByTryout, $finishedSessionsByTryout) {
+        $finishedSessionsByTryout = $finishedSessions->groupBy('tryout_id');
+        $attemptAggregates = ScoringService::sessionAggregates($finishedSessions->pluck('id'));
+
+        // Jumlah soal per tryout dalam satu kueri berkelompok, bukan satu kueri
+        // COUNT per tryout di dalam loop.
+        $subtestIdsByTryout = $tryouts->mapWithKeys(
+            fn ($tryout) => [$tryout->id => $tryout->tryoutSubtests->pluck('subtest_id')->all()],
+        );
+
+        $questionCountBySubtest = Question::whereIn('subtest_id', $subtestIdsByTryout->flatten()->unique()->values())
+            ->where('is_active', true)
+            ->selectRaw('subtest_id, count(*) as total')
+            ->groupBy('subtest_id')
+            ->pluck('total', 'subtest_id');
+
+        // Penyebut skala 0-1000 sifat tryout, jadi sekali per tryout - bukan
+        // sekali per percobaan seperti sebelumnya.
+        $maxPointsByTryout = $tryouts->mapWithKeys(
+            fn ($tryout) => [$tryout->id => ScoringService::maxScoreForTryout($tryout)],
+        );
+
+        $tryouts->each(function ($tryout) use ($user, $sessionsByTryout, $sessionCountsByTryout, $finishedSessionsByTryout, $attemptAggregates, $subtestIdsByTryout, $questionCountBySubtest, $maxPointsByTryout) {
             $session = $sessionsByTryout->get($tryout->id);
-            $subtestIds = $tryout->tryoutSubtests->pluck('subtest_id');
-            $totalQuestions = Question::whereIn('subtest_id', $subtestIds)
-                ->where('is_active', true)
-                ->count();
+            $totalQuestions = collect($subtestIdsByTryout->get($tryout->id) ?? [])
+                ->sum(fn ($id) => (int) ($questionCountBySubtest[$id] ?? 0));
 
             $tryout->setAttribute('user_is_enrolled', true);
             $tryout->setAttribute('user_attempt_count', (int) ($sessionCountsByTryout->get($tryout->id) ?? 0));
@@ -369,7 +388,13 @@ class UserTryoutController extends Controller
             $tryout->setAttribute(
                 'user_attempts',
                 ($finishedSessionsByTryout->get($tryout->id) ?? collect())
-                    ->map(fn ($attempt) => $this->formatAttemptHistory($tryout, $attempt, $totalQuestions))
+                    ->map(fn ($attempt) => $this->formatAttemptHistory(
+                        $tryout,
+                        $attempt,
+                        $totalQuestions,
+                        $attemptAggregates[(string) $attempt->id] ?? null,
+                        $maxPointsByTryout->get($tryout->id, 0.0),
+                    ))
                     ->values()
             );
 
@@ -910,37 +935,17 @@ class UserTryoutController extends Controller
 
         $rawIrtScore = 0;
         $finalScore1000 = 0;
-        // Populasi yang sama dengan yang dipakai leaderboard(): seluruh percobaan
-        // yang selesai. Kalau kedua tempat memakai populasi berbeda, satu sesi
-        // yang sama akan bernilai lain di halaman hasil dan di papan peringkat.
-        $totalParticipants = TryoutSession::where('tryout_id', $tryout->id)
-            ->where('status', 'finished')
-            ->count();
+
+        // Bobot IRT adalah sifat tryout, bukan sifat peserta, jadi dihitung satu
+        // kali di ScoringService dan dipakai bersama papan peringkat. Kalau
+        // keduanya menghitung sendiri, satu sesi yang sama bisa bernilai lain di
+        // halaman hasil dan di papan peringkat.
+        $irt = ScoringService::irtWeights($tryout, $subtestIds);
+        $totalParticipants = $irt['participants'];
 
         if ($isIrtReady && $totalParticipants > 0) {
-            $allTryoutQuestions = Question::whereIn('subtest_id', $subtestIds)
-                ->where('is_active', true)
-                ->get();
-
-            $totalWeightAll = 0;
-            $questionStats = [];
-
-            foreach ($allTryoutQuestions as $q) {
-                $correctCount = UserAnswer::where('question_id', $q->id)
-                    ->where('is_correct', true)
-                    ->whereHas('tryoutSession', function ($query) use ($tryout) {
-                        $query->where('tryout_id', $tryout->id)
-                            ->where('status', 'finished');
-                    })
-                    ->count();
-
-                $p = $correctCount / $totalParticipants;
-                $safeP = $p <= 0 ? 0.0001 : ($p >= 1 ? 0.9999 : $p);
-                $weight = max(1, log((1 - $safeP) / $safeP) + 2);
-
-                $questionStats[$q->id] = $weight;
-                $totalWeightAll += $weight;
-            }
+            $questionStats = $irt['weights'];
+            $totalWeightAll = $irt['total'];
 
             foreach ($session->answers as $answer) {
                 if ($answer->is_correct && isset($questionStats[$answer->question_id])) {
@@ -1020,7 +1025,12 @@ class UserTryoutController extends Controller
 
         // Semua percobaan yang selesai ikut dihitung; yang dipakai untuk peringkat
         // nanti hanya percobaan terbaik tiap peserta.
-        $sessionQuery = TryoutSession::with(['user', 'answers'])
+        // Jawaban sengaja tidak di-eager-load. Angka yang dibutuhkan papan
+        // peringkat - terjawab, benar, salah, skor mentah - dihitung database
+        // dalam satu kueri berkelompok; memuat tiap jawaban sebagai model
+        // Eloquent hanya untuk dihitung berarti menghidrasi puluhan ribu objek
+        // dan itulah, bukan kuerinya, yang memakan waktu.
+        $sessionQuery = TryoutSession::with('user')
             ->where('tryout_id', $tryout->id)
             ->where('status', 'finished');
 
@@ -1055,50 +1065,45 @@ class UserTryoutController extends Controller
         // populasi yang sama dengan pembilangnya - sebelumnya pembilang memakai
         // seluruh peserta sementara penyebutnya memakai peserta yang lolos filter
         // level, sehingga p bisa melebihi 1 pada papan peringkat region/sekolah.
-        $finishedSessionCount = TryoutSession::where('tryout_id', $tryout->id)
-            ->where('status', 'finished')
-            ->count();
-
-        if ($tryout->use_irt && $finishedSessionCount > 0) {
-            $allTryoutQuestions = Question::whereIn('subtest_id', $subtestIds)
-                ->where('is_active', true)
-                ->get();
-
-            foreach ($allTryoutQuestions as $question) {
-                $correctCount = UserAnswer::where('question_id', $question->id)
-                    ->where('is_correct', true)
-                    ->whereHas('tryoutSession', function ($query) use ($tryout) {
-                        $query->where('tryout_id', $tryout->id)
-                            ->where('status', 'finished');
-                    })
-                    ->count();
-
-                $p = $correctCount / $finishedSessionCount;
-                $safeP = $p <= 0 ? 0.0001 : ($p >= 1 ? 0.9999 : $p);
-                $weight = max(1, log((1 - $safeP) / $safeP) + 2);
-
-                $questionWeights[$question->id] = $weight;
-                $totalWeightAll += $weight;
-            }
+        //
+        // Perhitungannya satu tempat dengan halaman hasil, di ScoringService.
+        if ($tryout->use_irt) {
+            $irt = ScoringService::irtWeights($tryout, $subtestIds);
+            $questionWeights = $irt['weights'];
+            $totalWeightAll = $irt['total'];
         }
 
+        // Semuanya dihitung sekali untuk seluruh sesi, bukan sekali per sesi.
+        $sessionIds = $sessions->pluck('id');
+        $aggregates = ScoringService::sessionAggregates($sessionIds);
+
+        // Penyebut skala 0-1000 adalah sifat tryout, sama untuk semua pesertanya,
+        // jadi cukup dihitung sekali di luar loop.
+        $maxPointsTryout = $tryout->use_irt ? 0.0 : ScoringService::maxScoreForTryout($tryout);
+
+        $irtRawScores = $totalWeightAll > 0
+            ? ScoringService::irtRawScores($sessionIds, $questionWeights)
+            : [];
+
         $leaderboard = $sessions
-            ->map(function ($session) use ($totalQuestions, $tryout, $questionWeights, $totalWeightAll, $includeProofImages, $proofsByUser) {
-                $answered = $session->answers->whereNotNull('answer')->count();
-                $correct = $session->answers->where('is_correct', true)->count();
-                $wrong = $session->answers->where('is_correct', false)->count();
+            ->map(function ($session) use ($totalQuestions, $tryout, $totalWeightAll, $includeProofImages, $proofsByUser, $aggregates, $irtRawScores, $maxPointsTryout) {
+                $agg = $aggregates[(string) $session->id] ?? [
+                    'answered' => 0, 'correct' => 0, 'wrong' => 0, 'raw_score' => 0.0,
+                ];
+
+                $answered = $agg['answered'];
+                $correct = $agg['correct'];
+                $wrong = $agg['wrong'];
                 $unanswered = max($totalQuestions - $answered, 0);
                 $accuracy = $totalQuestions > 0 ? ($correct / $totalQuestions) * 100 : 0;
 
                 if ($tryout->use_irt && $totalWeightAll > 0) {
-                    $rawScore = $session->answers
-                        ->where('is_correct', true)
-                        ->sum(fn ($answer) => $questionWeights[$answer->question_id] ?? 0);
+                    $rawScore = $irtRawScores[(string) $session->id] ?? 0.0;
                     $finalScore = ($rawScore / $totalWeightAll) * 1000;
                     $maxScore = 1000;
                 } else {
-                    $rawScore = ScoringService::rawScoreForSession($session);
-                    $maxPoints = ScoringService::maxScoreForSession($session);
+                    $rawScore = $agg['raw_score'];
+                    $maxPoints = $maxPointsTryout;
                     $isCpns = $tryout->kategori === 'cpns';
                     $finalScore = $isCpns ? $rawScore : ($maxPoints > 0 ? ($rawScore / $maxPoints) * 1000 : 0);
                     $maxScore = $isCpns ? $maxPoints : 1000;
@@ -1334,14 +1339,33 @@ class UserTryoutController extends Controller
         ]);
     }
 
-    private function formatAttemptHistory(Tryout $tryout, TryoutSession $session, int $totalQuestions): array
-    {
-        $correct = $session->answers->where('is_correct', true)->count();
-        $answered = $session->answers->whereNotNull('answer')->count();
-        $wrong = $session->answers->where('is_correct', false)->count();
+    /**
+     * Satu baris riwayat percobaan.
+     *
+     * Agregat dan penyebut diterima dari pemanggil, bukan dihitung di sini.
+     * Sebelumnya metode ini menghitung sendiri - satu kueri jumlah skor dan
+     * beberapa kueri penyebut per percobaan - padahal pemanggilnya mengulangnya
+     * untuk setiap percobaan di setiap tryout, dan penyebutnya sama untuk semua
+     * percobaan pada tryout yang sama.
+     *
+     * @param  array{answered: int, correct: int, wrong: int, raw_score: float}|null  $aggregate
+     */
+    private function formatAttemptHistory(
+        Tryout $tryout,
+        TryoutSession $session,
+        int $totalQuestions,
+        ?array $aggregate = null,
+        ?float $maxPointsGiven = null,
+    ): array {
+        $aggregate ??= ScoringService::sessionAggregates([$session->id])[(string) $session->id]
+            ?? ['answered' => 0, 'correct' => 0, 'wrong' => 0, 'raw_score' => 0.0];
+
+        $correct = $aggregate['correct'];
+        $answered = $aggregate['answered'];
+        $wrong = $aggregate['wrong'];
         $accuracy = $totalQuestions > 0 ? ($correct / $totalQuestions) * 100 : 0;
-        $rawPoints = ScoringService::rawScoreForSession($session);
-        $maxPoints = ScoringService::maxScoreForSession($session);
+        $rawPoints = $aggregate['raw_score'];
+        $maxPoints = $maxPointsGiven ?? ScoringService::maxScoreForSession($session);
         $isCpns = $tryout->kategori === 'cpns';
         $finalScore = $isCpns ? $rawPoints : ($maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0);
 
