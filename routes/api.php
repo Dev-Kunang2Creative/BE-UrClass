@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\AccessCodeController;
+use App\Http\Controllers\Api\AdminFormasiImportController;
 use App\Http\Controllers\Api\AdminInstansiController;
 use App\Http\Controllers\Api\InstagramAccountController;
 use App\Http\Controllers\Api\InstansiController;
@@ -80,6 +81,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/instansi', [InstansiController::class, 'index']);
     Route::get('/instansi/{instansi}/formasi', [InstansiController::class, 'formasi']);
     Route::get('/formasi', [InstansiController::class, 'searchFormasi']);
+    // Dipakai form profil untuk tahu apakah daftar formasi periode ini sudah
+    // terbit. Kalau belum, kolomnya diganti pemberitahuan alih-alih picker kosong.
+    Route::get('/formasi/status', [InstansiController::class, 'status']);
 
     // Package & Orders
     Route::apiResource('packages', PackageCatalogController::class)->only(['index', 'show']);
@@ -168,6 +172,11 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::get('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'formasi']);
         Route::post('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'storeFormasi']);
         Route::delete('/instansi/{instansi}/formasi/{formasi}', [AdminInstansiController::class, 'destroyFormasi']);
+
+        // Impor massal. Satu periode seleksi bisa memuat ribuan formasi, jadi
+        // mengisinya lewat form per baris bukan pilihan yang masuk akal.
+        Route::post('/formasi/import', [AdminFormasiImportController::class, 'store']);
+        Route::get('/formasi/import/template', [AdminFormasiImportController::class, 'template']);
 
         Route::get('/instagram-accounts', [InstagramAccountController::class, 'adminIndex']);
         Route::post('/instagram-accounts', [InstagramAccountController::class, 'store']);

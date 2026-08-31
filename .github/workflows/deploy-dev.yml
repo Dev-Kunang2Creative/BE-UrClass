@@ -288,6 +288,7 @@ jobs:
           for pair in \
             "subtest-categories:SubtestCategorySeeder" \
             "instagram:InstagramAccountSeeder" \
+            "kedinasan:KedinasanSeeder" \
             "instansi:InstansiFormasiSeeder" ; do
             marker="storage/.${pair%%:*}-seeded"
             class="${pair##*:}"

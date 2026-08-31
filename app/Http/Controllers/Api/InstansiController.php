@@ -54,7 +54,7 @@ class InstansiController extends Controller
         ]);
 
         $query = $instansi->formasi()->getQuery()
-            ->select(['id', 'instansi_id', 'nama', 'jenjang'])
+            ->select(['id', 'instansi_id', 'nama', 'jenjang', 'periode'])
             ->active()
             ->orderBy('nama');
 
@@ -80,7 +80,7 @@ class InstansiController extends Controller
 
         $query = Formasi::query()
             ->with('instansi:id,nama')
-            ->select(['id', 'instansi_id', 'nama', 'jenjang'])
+            ->select(['id', 'instansi_id', 'nama', 'jenjang', 'periode'])
             ->active()
             ->orderBy('nama');
 
@@ -89,5 +89,35 @@ class InstansiController extends Controller
         }
 
         return response()->json($query->paginate($validated['per_page'] ?? 50));
+    }
+
+    /**
+     * Apakah daftar formasi sudah tersedia.
+     *
+     * Rincian formasi diterbitkan SSCASN per periode seleksi, jadi ada masa di
+     * mana instansinya sudah diketahui tetapi formasinya belum diumumkan sama
+     * sekali. Peserta yang membuka form profil pada masa itu perlu diberi tahu
+     * bahwa kolomnya memang belum bisa diisi - bukan dibiarkan menghadapi picker
+     * kosong yang tampak seperti kerusakan.
+     *
+     * Statusnya diturunkan dari datanya sendiri, bukan dari saklar yang harus
+     * diingat siapa pun: begitu admin mengunggah rekap formasi, jumlahnya berhenti
+     * nol dan pickernya hidup. Tidak ada langkah kedua yang bisa terlupa.
+     */
+    public function status(): JsonResponse
+    {
+        $total = Formasi::query()->active()->count();
+        $periode = Formasi::query()->active()->max('periode');
+
+        return response()->json([
+            'data' => [
+                'is_open' => $total > 0,
+                'total' => $total,
+                // Selama belum ada formasi, periode yang diumumkan adalah tahun
+                // berjalan - itulah periode yang sedang ditunggu peserta.
+                'periode' => (int) ($periode ?: now()->year),
+                'instansi_total' => Instansi::query()->active()->count(),
+            ],
+        ]);
     }
 }

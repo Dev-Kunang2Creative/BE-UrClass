@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * Satu formasi/jabatan yang dibuka sebuah instansi.
  *
- * Setara program_studi bagi jalur UTBK: pilihan tingkat kedua setelah
+ * Setara program_studi bagi jalur kedinasan: pilihan tingkat kedua setelah
  * instansinya dipilih, sehingga daftarnya bisa dipersempit.
  */
 class Formasi extends Model
@@ -21,11 +21,15 @@ class Formasi extends Model
         'instansi_id',
         'nama',
         'jenjang',
+        // Tahun seleksi formasi ini diterbitkan. Formasi terbit per periode,
+        // jadi tanpa kolom ini daftar dari tahun berbeda tidak bisa dipisahkan.
+        'periode',
         'is_active',
     ];
 
     protected $casts = [
         'is_active' => 'boolean',
+        'periode' => 'integer',
     ];
 
     public function instansi()
