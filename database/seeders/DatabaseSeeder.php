@@ -20,7 +20,6 @@ class DatabaseSeeder extends Seeder
             CpnsQuestionSeeder::class,
             PerguruanTinggiSeeder::class,
             InstagramAccountSeeder::class,
-            KedinasanSeeder::class,
             InstansiFormasiSeeder::class,
         ]);
     }

@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * Satu formasi/jabatan yang dibuka sebuah instansi.
  *
- * Setara program_studi bagi jalur kedinasan: pilihan tingkat kedua setelah
+ * Setara program_studi bagi jalur UTBK: pilihan tingkat kedua setelah
  * instansinya dipilih, sehingga daftarnya bisa dipersempit.
  */
 class Formasi extends Model

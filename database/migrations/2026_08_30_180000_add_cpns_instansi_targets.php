@@ -7,28 +7,16 @@ use Illuminate\Support\Facades\Schema;
 /**
  * Target untuk jalur CPNS, yang selama ini tidak ada.
  *
- * Peserta UTBK memilih target kampus dan jurusan; peserta CPNS melewatinya
- * sama sekali. Padahal jalur CPNS punya dua audiens dengan target berbeda
- * bentuk:
- *
- *   - Sekolah kedinasan: sekolah + program studi. Bentuknya sama persis dengan
- *     target PTN, jadi memakai tabel perguruan_tinggi dan program_studi yang
- *     sudah ada, dibedakan kolom jenis. Nilainya pun tersimpan di kolom
- *     target_university_* dan target_major_* yang sudah ada.
- *   - CPNS umum: instansi + formasi/jabatan. Bukan sekolah, jadi butuh tabel
- *     dan kolom sendiri.
- *
- * cpns_target_type menyatakan pasangan kolom mana yang berlaku untuk peserta
- * itu, supaya laporan tidak perlu menebak dari kolom mana yang terisi.
+ * Peserta UTBK memilih target kampus dan jurusan; peserta CPNS melewatinya sama
+ * sekali. Padahal pelamar CPNS punya target juga - hanya bentuknya berbeda:
+ * instansi dan formasi/jabatan, bukan sekolah dan program studi. Karena itu
+ * kolom target kampus yang sudah ada tidak bisa dipakai ulang, dan pasangan
+ * kolom ini berdiri sendiri.
  */
 return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('perguruan_tinggi', function (Blueprint $table) {
-            $table->enum('jenis', ['ptn', 'kedinasan'])->default('ptn')->after('nama')->index();
-        });
-
         Schema::create('instansi', function (Blueprint $table) {
             $table->ulid('id')->primary();
             $table->string('kode', 32)->nullable()->unique();
@@ -54,10 +42,7 @@ return new class extends Migration
         });
 
         Schema::table('users', function (Blueprint $table) {
-            $table->enum('cpns_target_type', ['kedinasan', 'umum'])
-                ->nullable()
-                ->after('target_major_2');
-            $table->string('target_instansi_1')->nullable()->after('cpns_target_type');
+            $table->string('target_instansi_1')->nullable()->after('target_major_2');
             $table->string('target_formasi_1')->nullable()->after('target_instansi_1');
             $table->string('target_instansi_2')->nullable()->after('target_formasi_1');
             $table->string('target_formasi_2')->nullable()->after('target_instansi_2');
@@ -68,7 +53,6 @@ return new class extends Migration
     {
         Schema::table('users', function (Blueprint $table) {
             $table->dropColumn([
-                'cpns_target_type',
                 'target_instansi_1',
                 'target_formasi_1',
                 'target_instansi_2',
@@ -78,9 +62,5 @@ return new class extends Migration
 
         Schema::dropIfExists('formasi');
         Schema::dropIfExists('instansi');
-
-        Schema::table('perguruan_tinggi', function (Blueprint $table) {
-            $table->dropColumn('jenis');
-        });
     }
 };
