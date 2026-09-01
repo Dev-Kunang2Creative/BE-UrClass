@@ -16,11 +16,18 @@ class TryoutSession extends Model
         'started_at',
         'finished_at',
         'status',
+        'total_score',
+        'raw_score',
+        'scoring_method',
+        'score_finalized',
     ];
 
     protected $casts = [
         'started_at' => 'datetime',
         'finished_at' => 'datetime',
+        'total_score' => 'decimal:2',
+        'raw_score' => 'decimal:2',
+        'score_finalized' => 'boolean',
     ];
 
     public function user()

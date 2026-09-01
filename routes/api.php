@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AccessCodeController;
 use App\Http\Controllers\Api\AdminFormasiImportController;
+use App\Http\Controllers\Api\AdminDummyParticipantController;
 use App\Http\Controllers\Api\AdminInstansiController;
 use App\Http\Controllers\Api\ProofRequirementController;
 use App\Http\Controllers\Api\InstansiController;
@@ -188,6 +189,11 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::delete('/proof-requirements/{proofRequirement}', [ProofRequirementController::class, 'destroy']);
 
         // --- TRYOUT & PENGATURAN TRYOUT ---
+        Route::get('/tryouts/dummy-excel-template', [AdminDummyParticipantController::class, 'template']);
+        Route::post('/tryouts/{tryout}/inject-dummy-random', [AdminDummyParticipantController::class, 'injectRandom']);
+        Route::post('/tryouts/{tryout}/inject-dummy-excel', [AdminDummyParticipantController::class, 'injectExcel']);
+        Route::delete('/tryouts/{tryout}/clear-dummy', [AdminDummyParticipantController::class, 'clear']);
+        Route::get('/tryouts/{tryout}/dummy-summary', [AdminDummyParticipantController::class, 'summary']);
         Route::get('/tryouts/{tryout}/participants', [TryoutController::class, 'participants']);
         Route::apiResource('tryouts', TryoutController::class);
         Route::get('/tryouts/{tryout}/export-pdf', [TryoutController::class, 'exportPdf']);

@@ -91,8 +91,14 @@ class TryoutController extends Controller
     {
         $search = $request->query('search');
         $statusFilter = $request->query('status');
+        $participantType = $request->query('participant_type', 'all');
 
         $query = $tryout->userAccesses()->with('user')
+            ->when(in_array($participantType, ['real', 'dummy'], true), function ($query) use ($participantType) {
+                $query->whereHas('user', fn ($userQuery) => $participantType === 'dummy'
+                    ? $userQuery->dummy()
+                    : $userQuery->real());
+            })
             ->when($search, function ($q, $search) {
                 $q->whereHas('user', function ($uq) use ($search) {
                     $uq->where('name', 'like', "%{$search}%")

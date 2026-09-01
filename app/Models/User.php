@@ -8,6 +8,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Illuminate\Database\Eloquent\Builder;
 
 class User extends Authenticatable
 {
@@ -18,6 +19,7 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
+        'is_dummy',
         'kategori',
         'google_id',
         'phone_number',
@@ -52,7 +54,18 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_dummy' => 'boolean',
         ];
+    }
+
+    public function scopeReal(Builder $query): Builder
+    {
+        return $query->where('is_dummy', false);
+    }
+
+    public function scopeDummy(Builder $query): Builder
+    {
+        return $query->where('is_dummy', true);
     }
 
     public function setNameAttribute($value): void

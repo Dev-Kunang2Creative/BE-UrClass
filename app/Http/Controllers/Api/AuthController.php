@@ -56,7 +56,7 @@ class AuthController extends Controller
             'password' => ['required', 'string'],
         ]);
 
-        $user = User::where('email', $validated['email'])->first();
+        $user = User::real()->where('email', $validated['email'])->first();
         
         if ($user && !$user->password) {
             throw ValidationException::withMessages([
@@ -134,7 +134,7 @@ class AuthController extends Controller
         try {
             $googleUser = Socialite::driver('google')->stateless()->user();
             
-            $user = User::where('email', $googleUser->getEmail())->first();
+            $user = User::real()->where('email', $googleUser->getEmail())->first();
 
             if (!$user) {
                 $user = User::create([

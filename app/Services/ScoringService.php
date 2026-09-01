@@ -519,4 +519,31 @@ class ScoringService
             return ['weights' => $weights, 'total' => $total, 'participants' => $participants];
         });
     }
+
+    public static function forgetIrtWeights(Tryout $tryout): void
+    {
+        $ids = $tryout->tryoutSubtests()
+            ->where('is_active', true)
+            ->pluck('subtest_id')
+            ->filter()
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        $participants = TryoutSession::where('tryout_id', $tryout->id)
+            ->where('status', 'finished')
+            ->count();
+
+        if ($participants < 1 || $ids === []) {
+            return;
+        }
+
+        Cache::forget(sprintf(
+            'irt-weights:%s:%d:%s',
+            $tryout->id,
+            $participants,
+            md5(implode(',', $ids)),
+        ));
+    }
 }

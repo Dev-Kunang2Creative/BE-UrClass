@@ -17,8 +17,12 @@ class AdminUserController extends Controller
     public function index(Request $request): JsonResponse
     {
         $perPage = min((int) ($request->per_page ?? 15), 100);
-        $users = User::latest()
-            ->when($request->search, fn($q, $s) => $q->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%"))
+        $users = User::real()
+            ->latest()
+            ->when($request->search, fn($q, $s) => $q->where(function ($searchQuery) use ($s) {
+                $searchQuery->where('name', 'like', "%{$s}%")
+                    ->orWhere('email', 'like', "%{$s}%");
+            }))
             ->paginate($perPage);
 
         return response()->json($users);
@@ -31,7 +35,7 @@ class AdminUserController extends Controller
 
     public function export(Request $request): StreamedResponse
     {
-        $users = User::where('role', 'user')
+        $users = User::real()->where('role', 'user')
             ->when($request->search, fn($q, $s) =>
                 $q->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%")
             )
