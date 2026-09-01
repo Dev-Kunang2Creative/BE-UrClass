@@ -66,9 +66,9 @@ class QuestionController extends Controller
         $validated = $request->validate([
             'question_type' => ['nullable', 'string', Rule::in(['multiple_choice', 'essay'])],
             'question_text' => ['nullable', 'string'],
-            'question_image' => ['nullable', 'image', 'max:2048'],
+            'question_image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'discussion' => ['nullable', 'string'],
-            'discussion_image' => ['nullable', 'image', 'max:2048'],
+            'discussion_image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'correct_answer' => ['nullable', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'order_no' => ['nullable', 'integer', 'min:1'],
             'is_active' => ['nullable', 'boolean'],
@@ -76,7 +76,7 @@ class QuestionController extends Controller
             'options' => ['nullable', 'array'],
             'options.*.option_key' => ['required', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'options.*.option_text' => ['nullable', 'string'],
-            'options.*.image' => ['nullable', 'image', 'max:2048'],
+            'options.*.image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'options.*.score' => ['nullable', 'numeric', 'min:0', 'max:100'],
         ]);
 
@@ -192,9 +192,9 @@ class QuestionController extends Controller
         $validated = $request->validate([
             'question_type' => ['nullable', 'string', Rule::in(['multiple_choice', 'essay'])],
             'question_text' => ['nullable', 'string'],
-            'question_image' => ['nullable', 'image', 'max:2048'],
+            'question_image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'discussion' => ['nullable', 'string'],
-            'discussion_image' => ['nullable', 'image', 'max:2048'],
+            'discussion_image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'correct_answer' => ['nullable', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'order_no' => ['required', 'integer', 'min:1'],
             'is_active' => ['required', 'boolean'],
@@ -202,7 +202,7 @@ class QuestionController extends Controller
             'options' => ['nullable', 'array'],
             'options.*.option_key' => ['required', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'options.*.option_text' => ['nullable', 'string'],
-            'options.*.image' => ['nullable', 'image', 'max:2048'],
+            'options.*.image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'options.*.score' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'delete_question_image' => ['nullable', 'boolean'],
             'delete_discussion_image' => ['nullable', 'boolean'],
@@ -336,7 +336,19 @@ class QuestionController extends Controller
             ], 422);
         }
 
+        $imagePaths = collect([
+            $question->question_image,
+            $question->discussion_image,
+            ...$question->options()->pluck('image')->all(),
+        ])->filter()->values()->all();
+
         $question->delete();
+
+        // File tidak ikut terhapus oleh soft delete/database cascade. Hapus
+        // setelah record berhasil dihapus agar storage tidak dipenuhi orphan.
+        if ($imagePaths !== []) {
+            Storage::disk('public')->delete($imagePaths);
+        }
 
         return response()->json([
             'message' => 'Soal berhasil dihapus',
