@@ -288,6 +288,7 @@ jobs:
           for pair in \
             "subtest-categories:SubtestCategorySeeder" \
             "proof-requirements:ProofRequirementSeeder" \
+            "ai-settings:AiSettingSeeder" \
             "kedinasan:KedinasanSeeder" \
             "instansi:InstansiFormasiSeeder" ; do
             marker="storage/.${pair%%:*}-seeded"

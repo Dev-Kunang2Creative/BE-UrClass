@@ -1,10 +1,12 @@
 <?php
 
 use App\Http\Controllers\Api\AccessCodeController;
+use App\Http\Controllers\Api\AdminAiSettingController;
 use App\Http\Controllers\Api\AdminFormasiImportController;
 use App\Http\Controllers\Api\AdminDummyParticipantController;
 use App\Http\Controllers\Api\AdminInstansiController;
 use App\Http\Controllers\Api\ProofRequirementController;
+use App\Http\Controllers\Api\AiChatController;
 use App\Http\Controllers\Api\InstansiController;
 use App\Http\Controllers\Api\AdminAccessCodeController;
 use App\Http\Controllers\Api\AdminOrderController;
@@ -65,6 +67,11 @@ Route::middleware('auth:sanctum')->group(function () {
     // Dibaca halaman pendaftaran tryout gratis untuk menampilkan akun yang
     // harus di-follow sekaligus menentukan berapa bukti yang diminta.
     Route::get('/proof-requirements', [ProofRequirementController::class, 'index']);
+
+    // Asisten AI. Throttle di sini menahan banjir permintaan; kuota harian per
+    // peserta ada di controller karena angkanya bisa diatur admin.
+    Route::get('/chat/status', [AiChatController::class, 'status']);
+    Route::post('/chat', [AiChatController::class, 'send'])->middleware('throttle:20,1');
     Route::get('/subtests', [SubtestController::class, 'index']);
     Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
 
@@ -178,6 +185,12 @@ Route::middleware(['auth:sanctum', 'admin'])
         // mengisinya lewat form per baris bukan pilihan yang masuk akal.
         Route::post('/formasi/import', [AdminFormasiImportController::class, 'store']);
         Route::get('/formasi/import/template', [AdminFormasiImportController::class, 'template']);
+
+        // Pengaturan asisten AI. Kunci API tidak pernah dikirim balik - yang
+        // keluar hanya bentuk tersamar.
+        Route::get('/ai-settings', [AdminAiSettingController::class, 'show']);
+        Route::put('/ai-settings', [AdminAiSettingController::class, 'update']);
+        Route::post('/ai-settings/test', [AdminAiSettingController::class, 'test'])->middleware('throttle:10,1');
 
         Route::get('/proof-requirements', [ProofRequirementController::class, 'adminIndex']);
         Route::post('/proof-requirements', [ProofRequirementController::class, 'store']);
