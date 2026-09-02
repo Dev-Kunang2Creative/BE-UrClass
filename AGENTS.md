@@ -18,5 +18,7 @@ Yang paling sering menggigit, kalau hanya sempat membaca satu bagian:
    PTN). Data referensi di-commit sebagai CSV dengan provenansinya dicatat.
 5. **`composer audit` terpisah dari `npm audit`** dan pernah menyembunyikan 41
    advisory.
+6. **Kredensial pihak ketiga tidak pernah keluar dari server**, dan URL yang
+   bisa diatur admin harus lewat `SafeOutboundUrl` sebelum dipanggil.
 
 Sebelum commit: `php artisan test` dan `composer audit` harus bersih.

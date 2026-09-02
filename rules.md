@@ -258,6 +258,56 @@ Setiap kelompok endpoint admin baru butuh test yang memastikan peserta menerima
 
 ---
 
+## 7b. Kredensial pihak ketiga yang diatur admin
+
+Pengguna menyatakan ini dengan tegas: **endpoint dan API key tidak boleh
+tersebar.** Pola yang dipakai asisten AI (`AiSetting`, `AiChatService`) adalah
+acuan untuk integrasi berkunci berikutnya.
+
+Empat aturannya:
+
+1. **Kredensial tidak pernah keluar dari server.** Frontend hanya mengenal
+   endpoint milik aplikasi sendiri (`POST /api/chat`), dan seluruh permintaan ke
+   pihak ketiga terjadi di server. Kunci yang pernah sampai ke browser harus
+   dianggap bocor.
+2. **Terenkripsi saat disimpan** (cast `encrypted`) dan `$hidden` di model,
+   sehingga dump database tidak memuat kunci yang bisa dipakai dan model yang
+   ikut ter-serialize karena kelalaian tidak membocorkannya.
+3. **Panel admin hanya menerima bentuk tersamar.** Bahkan admin tidak bisa
+   membaca kembali kuncinya. Konsekuensinya, kolom kunci yang dikirim kosong
+   berarti "pertahankan yang ada" — kalau tidak, masknya yang tersimpan sebagai
+   kunci dan asisten mati dengan 401 yang tidak jelas sebabnya.
+4. **Galat pihak ketiga diterjemahkan sebelum diteruskan**, dan payload tidak
+   pernah masuk log. Badan galat provider sering memuat kunci dan URL, dan log
+   adalah tempat kunci paling sering bocor tanpa disadari.
+
+### URL yang bisa diatur admin dan dipanggil server adalah jalur SSRF
+
+Pakai `App\Support\SafeOutboundUrl` sebelum memanggil URL apa pun yang asalnya
+dari input. Ia menolak selain https, loopback, rentang privat, link-local, dan
+nama domain internal.
+
+Yang paling berbahaya `169.254.169.254` — endpoint metadata di AWS, GCP, Azure,
+dan DigitalOcean, yang sering menyajikan kredensial instans tanpa autentikasi
+apa pun. Tanpa penjagaan ini, kolom endpoint di panel admin adalah cara membaca
+kredensial server lewat servernya sendiri.
+
+Periksa **dua kali**: saat menyimpan dan tepat sebelum permintaan dikirim. Yang
+kedua bukan pengulangan sia-sia — nama host bisa menunjuk alamat berbeda di dua
+waktu, sehingga pemeriksaan saat menyimpan saja bisa dilewati.
+
+### Fitur berbiaya per panggilan wajib punya batas per pengguna
+
+Chat AI membebani biaya setiap pesan. Tanpa kuota per akun, satu pengguna — atau
+satu skrip yang memakai tokennya — bisa menghabiskan anggaran sendirian dalam
+satu malam.
+
+Kuotanya dihitung **setelah** panggilan berhasil: permintaan yang gagal karena
+provider bermasalah tidak boleh memakan kuota pengguna. Dan `is_active` bawaannya
+`false` — fitur berbiaya tidak boleh hidup hanya karena seeder dijalankan.
+
+---
+
 ## 8. Verifikasi sebelum commit
 
 ```bash
