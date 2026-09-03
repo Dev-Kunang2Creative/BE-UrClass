@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AccessCodeController;
 use App\Http\Controllers\Api\AdminAiSettingController;
+use App\Http\Controllers\Api\AdminAiUsageController;
 use App\Http\Controllers\Api\AdminFormasiImportController;
 use App\Http\Controllers\Api\AdminDummyParticipantController;
 use App\Http\Controllers\Api\AdminInstansiController;
@@ -191,6 +192,8 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::get('/ai-settings', [AdminAiSettingController::class, 'show']);
         Route::put('/ai-settings', [AdminAiSettingController::class, 'update']);
         Route::post('/ai-settings/test', [AdminAiSettingController::class, 'test'])->middleware('throttle:10,1');
+        Route::post('/ai-settings/models', [AdminAiSettingController::class, 'models'])->middleware('throttle:20,1');
+        Route::get('/ai-usage', [AdminAiUsageController::class, 'index']);
 
         Route::get('/proof-requirements', [ProofRequirementController::class, 'adminIndex']);
         Route::post('/proof-requirements', [ProofRequirementController::class, 'store']);

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\AiProviderException;
 use App\Http\Controllers\Controller;
 use App\Models\AiSetting;
 use App\Services\AiChatService;
@@ -47,6 +48,13 @@ class AdminAiSettingController extends Controller
             'system_prompt' => ['required', 'string', 'max:20000'],
             'max_tokens' => ['required', 'integer', 'min:256', 'max:32000'],
             'temperature_x100' => ['required', 'integer', 'min:0', 'max:200'],
+            // Harga per satu juta token, USD. Dipakai untuk estimasi biaya di
+            // pemantauan dan dibekukan ke tiap baris log saat permintaan
+            // terjadi - jadi mengubahnya di sini tidak mengubah biaya yang
+            // sudah tercatat.
+            'price_input_per_mtok' => ['required', 'numeric', 'min:0', 'max:9999'],
+            'price_output_per_mtok' => ['required', 'numeric', 'min:0', 'max:9999'],
+            'price_cached_per_mtok' => ['required', 'numeric', 'min:0', 'max:9999'],
             'daily_message_limit' => ['required', 'integer', 'min:1', 'max:1000'],
             'history_limit' => ['required', 'integer', 'min:0', 'max:40'],
             'is_active' => ['required', 'boolean'],
@@ -116,35 +124,45 @@ class AdminAiSettingController extends Controller
     /**
      * Uji koneksi ke provider dengan satu pesan pendek.
      *
-     * Ada supaya admin tidak perlu menebak apakah kredensialnya benar dengan
-     * membuka jendela chat sebagai peserta - dan supaya galatnya bisa
-     * ditampilkan apa adanya di sini, di layar yang hanya dilihat admin.
+     * Menguji **apa yang sedang ada di form**, bukan yang sudah tersimpan.
+     * Sebelumnya ia memakai baris tersimpan, sehingga admin yang mengetik kunci
+     * lalu langsung menekan uji justru menguji kunci lama - dan menerima galat
+     * 401 yang tampak seperti kunci barunya salah. Tombol yang berdiri di
+     * samping kolom yang belum tersimpan harus menguji isi kolom itu.
      */
     public function test(Request $request, AiChatService $chat): JsonResponse
     {
-        $setting = AiSetting::current();
+        $probe = $this->probeFromRequest($request);
 
-        if (! filled($setting->endpoint) || ! filled($setting->api_key) || ! filled($setting->model)) {
-            return response()->json([
-                'message' => 'Endpoint, API key, dan model harus terisi dulu.',
-            ], 422);
+        if ($probe instanceof JsonResponse) {
+            return $probe;
         }
 
         // Diuji apa adanya walau is_active masih false: justru itu gunanya -
         // memastikan konfigurasinya jalan sebelum dinyalakan untuk peserta.
-        $probe = $setting->replicate();
         $probe->is_active = true;
-        $probe->max_tokens = min($setting->max_tokens, 256);
+        $probe->max_tokens = min($probe->max_tokens ?: 256, 256);
 
         try {
             $hasil = $chat->send($probe, 'Balas dengan satu kata: OK');
+        } catch (AiProviderException $e) {
+            // Admin melihat status dan potongan galat aslinya - itulah yang
+            // dicari orang yang sedang mendiagnosis. Kuncinya disensor lebih
+            // dulu, karena badan galat provider sering meng-echo kunci yang
+            // dikirim.
+            return response()->json([
+                'message' => $e->status()
+                    ? "Provider menolak dengan status {$e->status()}."
+                    : $e->getMessage(),
+                'detail' => $e->detail($probe->api_key),
+            ], 422);
         } catch (RuntimeException $e) {
             return response()->json(['message' => $e->getMessage()], 422);
         } catch (Throwable $e) {
             return response()->json(['message' => 'Uji koneksi gagal: '.$e->getMessage()], 422);
         }
 
-        AuditLogger::log('AiSetting', 'test', 'Uji koneksi AI berhasil', $request->user(), $setting);
+        AuditLogger::log('AiSetting', 'test', 'Uji koneksi AI berhasil', $request->user());
 
         return response()->json([
             'message' => 'Koneksi berhasil.',
@@ -154,6 +172,110 @@ class AdminAiSettingController extends Controller
                 'usage' => $hasil['usage'],
             ],
         ]);
+    }
+
+    /**
+     * Daftar model dari provider, supaya admin memilih alih-alih menghafal id.
+     *
+     * Memakai isi form dengan alasan yang sama seperti uji koneksi: daftarnya
+     * dibutuhkan justru saat kredensialnya baru diketik dan belum disimpan.
+     */
+    public function models(Request $request, AiChatService $chat): JsonResponse
+    {
+        $probe = $this->probeFromRequest($request, requireModel: false);
+
+        if ($probe instanceof JsonResponse) {
+            return $probe;
+        }
+
+        try {
+            $models = $chat->listModels($probe);
+        } catch (AiProviderException $e) {
+            return response()->json([
+                'message' => $e->status()
+                    ? "Provider menolak dengan status {$e->status()}."
+                    : $e->getMessage(),
+                'detail' => $e->detail($probe->api_key),
+            ], 422);
+        } catch (RuntimeException $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        } catch (Throwable $e) {
+            return response()->json(['message' => 'Gagal memuat daftar model: '.$e->getMessage()], 422);
+        }
+
+        return response()->json([
+            'message' => count($models).' model ditemukan.',
+            'data' => $models,
+        ]);
+    }
+
+    /**
+     * Menyusun pengaturan sementara dari isi form, jatuh kembali ke yang
+     * tersimpan untuk kolom yang tidak dikirim.
+     *
+     * Tidak pernah disimpan - hanya dipakai untuk satu permintaan keluar. Jadi
+     * admin bisa menguji kredensial sebelum menyimpannya, dan kredensial yang
+     * ternyata salah tidak pernah masuk database.
+     *
+     * @return AiSetting|JsonResponse
+     */
+    private function probeFromRequest(Request $request, bool $requireModel = true)
+    {
+        $validated = $request->validate([
+            'provider' => ['nullable', Rule::in(AiSetting::PROVIDERS)],
+            'endpoint' => ['nullable', 'string', 'max:255'],
+            'api_key' => ['nullable', 'string', 'max:500'],
+            'model' => ['nullable', 'string', 'max:120'],
+        ]);
+
+        $tersimpan = AiSetting::current();
+
+        $probe = $tersimpan->replicate();
+        $probe->provider = $validated['provider'] ?? $tersimpan->provider;
+        $probe->endpoint = filled($validated['endpoint'] ?? null) ? trim($validated['endpoint']) : $tersimpan->endpoint;
+        $probe->model = filled($validated['model'] ?? null) ? trim($validated['model']) : $tersimpan->model;
+
+        // Mask yang terkirim balik dari form bukan kunci; abaikan.
+        $kunci = trim((string) ($validated['api_key'] ?? ''));
+        $kunciBaru = ($kunci !== '' && ! str_contains($kunci, '…')) ? $kunci : null;
+
+        $probe->api_key = $kunciBaru ?? $tersimpan->api_key;
+
+        if (! filled($probe->endpoint) || ! filled($probe->api_key) || ($requireModel && ! filled($probe->model))) {
+            return response()->json([
+                'message' => $requireModel
+                    ? 'Endpoint, API key, dan model harus terisi dulu.'
+                    : 'Endpoint dan API key harus terisi dulu.',
+            ], 422);
+        }
+
+        // Pemeriksaan keamanan lebih dulu: endpoint internal ditolak sebagai
+        // endpoint internal, apa pun keadaan kuncinya.
+        if ($alasan = SafeOutboundUrl::reject($probe->endpoint)) {
+            return response()->json([
+                'message' => 'Validasi gagal',
+                'errors' => ['endpoint' => [$alasan]],
+            ], 422);
+        }
+
+        // Kunci milik endpoint tertentu. Kalau endpointnya berganti dan kolom
+        // kunci dibiarkan kosong, memakai kunci lama berarti mengujinya terhadap
+        // provider yang sama sekali berbeda - hasilnya 401 yang tampak seperti
+        // endpoint barunya salah.
+        //
+        // Ini jebakan nyata: antarmuka justru menganjurkan mengosongkan kolom
+        // kunci ("biarkan kosong kalau tidak ingin menggantinya"), sehingga
+        // admin yang berpindah provider hampir pasti melakukannya.
+        if ($kunciBaru === null && $probe->endpoint !== $tersimpan->endpoint && filled($tersimpan->api_key)) {
+            return response()->json([
+                'message' => 'Validasi gagal',
+                'errors' => ['api_key' => [
+                    'Endpointnya berbeda dari yang tersimpan, jadi API key-nya harus diisi juga - kunci lama milik endpoint lama.',
+                ]],
+            ], 422);
+        }
+
+        return $probe;
     }
 
     /**
@@ -171,6 +293,9 @@ class AdminAiSettingController extends Controller
             'system_prompt' => $setting->system_prompt,
             'max_tokens' => $setting->max_tokens,
             'temperature_x100' => $setting->temperature_x100,
+            'price_input_per_mtok' => (float) $setting->price_input_per_mtok,
+            'price_output_per_mtok' => (float) $setting->price_output_per_mtok,
+            'price_cached_per_mtok' => (float) $setting->price_cached_per_mtok,
             'daily_message_limit' => $setting->daily_message_limit,
             'history_limit' => $setting->history_limit,
             'is_active' => $setting->is_active,

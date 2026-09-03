@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\AiProviderException;
 use App\Models\AiSetting;
 use App\Support\SafeOutboundUrl;
 use Illuminate\Http\Client\ConnectionException;
@@ -32,7 +33,7 @@ class AiChatService
 
     /**
      * @param  array<int, array{role: string, content: string}>  $history
-     * @return array{reply: string, model: string, usage: array<string, int>}
+     * @return array{reply: string, model: string, usage: array{input_tokens: int, output_tokens: int, cached_tokens: int}}
      */
     public function send(AiSetting $setting, string $message, array $history = []): array
     {
@@ -74,7 +75,12 @@ class AiChatService
                 'error' => mb_substr((string) $response->body(), 0, 300),
             ]);
 
-            throw new RuntimeException($this->humaniseError($response->status()));
+            // Dua pesan: satu untuk peserta, satu untuk admin yang mendiagnosis.
+            throw new AiProviderException(
+                $this->humaniseError($response->status()),
+                $response->status(),
+                mb_substr(trim((string) $response->body()), 0, 400),
+            );
         }
 
         return $setting->provider === AiSetting::PROVIDER_ANTHROPIC
@@ -191,6 +197,10 @@ class AiChatService
             'usage' => [
                 'input_tokens' => (int) ($body['usage']['prompt_tokens'] ?? 0),
                 'output_tokens' => (int) ($body['usage']['completion_tokens'] ?? 0),
+                // Sebagian gateway OpenAI-compatible melaporkannya, sebagian
+                // tidak. Yang tidak melaporkan menghasilkan 0, dan itu berarti
+                // estimasi biayanya konservatif - bukan salah.
+                'cached_tokens' => (int) ($body['usage']['prompt_tokens_details']['cached_tokens'] ?? 0),
             ],
         ];
     }
@@ -219,8 +229,13 @@ class AiChatService
             'reply' => $reply,
             'model' => (string) ($body['model'] ?? $setting->model),
             'usage' => [
-                'input_tokens' => (int) ($body['usage']['input_tokens'] ?? 0),
+                // Anthropic melaporkan input_tokens tidak termasuk yang dibaca
+                // dari cache, jadi keduanya dijumlahkan supaya artinya sama
+                // dengan jalur OpenAI-compatible: total token masukan.
+                'input_tokens' => (int) ($body['usage']['input_tokens'] ?? 0)
+                    + (int) ($body['usage']['cache_read_input_tokens'] ?? 0),
                 'output_tokens' => (int) ($body['usage']['output_tokens'] ?? 0),
+                'cached_tokens' => (int) ($body['usage']['cache_read_input_tokens'] ?? 0),
             ],
         ];
     }
@@ -237,5 +252,71 @@ class AiChatService
             $status >= 500 => 'Layanan AI sedang bermasalah. Coba lagi sebentar.',
             default => 'Asisten AI gagal menjawab. Coba lagi sebentar.',
         };
+    }
+
+    /**
+     * Daftar model yang tersedia di endpoint yang diberikan.
+     *
+     * Kedua bentuk provider menyediakannya di jalur yang sama-sama bernama
+     * "models", jadi admin tidak perlu menghafal id model - ia memilih dari
+     * daftar, seperti di dasbor providernya sendiri.
+     *
+     * Dipanggil dengan pengaturan yang belum tentu tersimpan, supaya admin bisa
+     * memuat daftarnya sambil mengetik kredensial - bukan setelah menyimpan.
+     *
+     * @return array<int, array{id: string, name: string|null}>
+     */
+    public function listModels(AiSetting $setting): array
+    {
+        if ($alasan = SafeOutboundUrl::reject($setting->endpoint)) {
+            throw new RuntimeException("Endpoint tidak aman: {$alasan}");
+        }
+
+        $anthropic = $setting->provider === AiSetting::PROVIDER_ANTHROPIC;
+
+        $url = rtrim((string) $setting->endpoint, '/').($anthropic ? '/v1/models' : '/models');
+
+        $headers = $anthropic
+            ? ['x-api-key' => $setting->api_key, 'anthropic-version' => '2023-06-01']
+            : ['Authorization' => 'Bearer '.$setting->api_key];
+
+        try {
+            $response = Http::withHeaders($headers)->timeout(30)->get($url);
+        } catch (ConnectionException) {
+            throw new RuntimeException('Tidak bisa menghubungi provider AI.');
+        }
+
+        if ($response->failed()) {
+            throw new AiProviderException(
+                $this->humaniseError($response->status()),
+                $response->status(),
+                mb_substr(trim((string) $response->body()), 0, 400),
+            );
+        }
+
+        // Anthropic dan OpenAI-compatible sama-sama membungkus daftarnya di
+        // "data"; yang berbeda hanya nama kolom labelnya.
+        $rows = $response->json('data') ?? [];
+
+        $models = [];
+
+        foreach ($rows as $row) {
+            $id = $row['id'] ?? null;
+
+            if (! is_string($id) || $id === '') {
+                continue;
+            }
+
+            $models[] = [
+                'id' => $id,
+                'name' => is_string($row['display_name'] ?? $row['name'] ?? null)
+                    ? ($row['display_name'] ?? $row['name'])
+                    : null,
+            ];
+        }
+
+        usort($models, fn ($a, $b) => strcasecmp($a['id'], $b['id']));
+
+        return $models;
     }
 }

@@ -370,6 +370,149 @@ class AiChatTest extends TestCase
             ->assertStatus(422)->assertJsonValidationErrors('message');
     }
 
+
+    // ---------------------------------------------------------------
+    // Uji koneksi dan daftar model
+    // ---------------------------------------------------------------
+
+    /**
+     * Uji koneksi memakai isi form, bukan yang tersimpan.
+     *
+     * Ini bug yang benar-benar terjadi: admin mengetik kunci baru, menekan uji
+     * koneksi tanpa menyimpan, dan menerima 401 dari kunci LAMA - yang tampak
+     * seperti kunci barunya salah.
+     */
+    public function test_uji_koneksi_memakai_kunci_dari_form_bukan_yang_tersimpan(): void
+    {
+        $this->konfigurasi(['api_key' => 'sk-kunci-lama-yang-sudah-mati']);
+
+        Http::fake(['*' => Http::response(['choices' => [['message' => ['content' => 'OK']]]])]);
+
+        $this->actingAs($this->admin)->postJson('/api/admin/ai-settings/test', [
+            'api_key' => 'sk-kunci-baru-yang-benar-1234',
+            'endpoint' => 'https://openrouter.ai/api/v1',
+            'model' => 'model/uji',
+        ])->assertOk();
+
+        Http::assertSent(fn ($request) => $request->hasHeader(
+            'Authorization',
+            'Bearer sk-kunci-baru-yang-benar-1234',
+        ));
+
+        // Dan kunci yang diuji tidak ikut tersimpan - uji bukan simpan.
+        $this->assertSame('sk-kunci-lama-yang-sudah-mati', AiSetting::current()->api_key);
+    }
+
+    /** Admin melihat status dan potongan galat asli, bukan pesan untuk peserta. */
+    public function test_uji_koneksi_menampilkan_galat_asli_ke_admin(): void
+    {
+        $this->konfigurasi();
+
+        Http::fake(['*' => Http::response([
+            'error' => ['message' => 'No auth credentials found', 'code' => 401],
+        ], 401)]);
+
+        $response = $this->actingAs($this->admin)->postJson('/api/admin/ai-settings/test', []);
+
+        $response->assertStatus(422);
+        $this->assertStringContainsString('401', $response->json('message'));
+        // Rinciannya ada, dan berguna.
+        $this->assertStringContainsString('No auth credentials', $response->json('detail'));
+        // Tapi bukan pesan yang ditujukan untuk peserta.
+        $this->assertStringNotContainsString('Hubungi admin', $response->json('message'));
+    }
+
+    /** Kunci yang di-echo provider disensor sebelum ditampilkan ke admin. */
+    public function test_kunci_di_dalam_galat_provider_disensor(): void
+    {
+        $this->konfigurasi();
+
+        Http::fake(['*' => Http::response([
+            'error' => ['message' => 'Invalid key '.self::KUNCI],
+        ], 401)]);
+
+        $detail = $this->actingAs($this->admin)
+            ->postJson('/api/admin/ai-settings/test', [])
+            ->json('detail');
+
+        $this->assertStringNotContainsString(self::KUNCI, (string) $detail);
+        $this->assertStringContainsString('DISENSOR', (string) $detail);
+    }
+
+    /** Daftar model diambil dari provider dan diurutkan. */
+    public function test_daftar_model_dimuat_dari_provider(): void
+    {
+        $this->konfigurasi();
+
+        Http::fake(['*' => Http::response(['data' => [
+            ['id' => 'zzz/model-terakhir'],
+            ['id' => 'aaa/model-pertama', 'name' => 'Model Pertama'],
+            ['id' => ''],
+            ['tanpa_id' => true],
+        ]])]);
+
+        $response = $this->actingAs($this->admin)->postJson('/api/admin/ai-settings/models', []);
+
+        $response->assertOk();
+        $models = $response->json('data');
+
+        // Baris tanpa id dibuang, sisanya urut.
+        $this->assertCount(2, $models);
+        $this->assertSame('aaa/model-pertama', $models[0]['id']);
+        $this->assertSame('Model Pertama', $models[0]['name']);
+        $this->assertSame('zzz/model-terakhir', $models[1]['id']);
+    }
+
+    /** Jalur model Anthropic berbeda dan memakai header yang berbeda. */
+    public function test_daftar_model_anthropic_memakai_jalur_dan_header_sendiri(): void
+    {
+        $this->konfigurasi([
+            'provider' => AiSetting::PROVIDER_ANTHROPIC,
+            'endpoint' => 'https://api.anthropic.com',
+        ]);
+
+        Http::fake(['*' => Http::response(['data' => [
+            ['id' => 'claude-opus-5', 'display_name' => 'Claude Opus 5'],
+        ]])]);
+
+        $this->actingAs($this->admin)->postJson('/api/admin/ai-settings/models', [])->assertOk();
+
+        Http::assertSent(fn ($request) => $request->url() === 'https://api.anthropic.com/v1/models'
+            && $request->hasHeader('x-api-key', self::KUNCI));
+    }
+
+    /** Daftar model tidak butuh model terisi - itu justru yang sedang dicari. */
+    public function test_daftar_model_tidak_butuh_model_terisi(): void
+    {
+        $this->konfigurasi(['model' => 'x']);
+        Http::fake(['*' => Http::response(['data' => [['id' => 'a/b']]])]);
+
+        $this->actingAs($this->admin)->postJson('/api/admin/ai-settings/models', [
+            'model' => '',
+        ])->assertOk();
+    }
+
+    /** Endpoint internal ditolak juga di jalur uji dan daftar model. */
+    public function test_endpoint_internal_ditolak_di_uji_dan_daftar_model(): void
+    {
+        $this->konfigurasi();
+
+        foreach (['test', 'models'] as $aksi) {
+            $this->actingAs($this->admin)->postJson("/api/admin/ai-settings/{$aksi}", [
+                'endpoint' => 'https://169.254.169.254/v1',
+            ])->assertStatus(422)->assertJsonValidationErrors('endpoint');
+        }
+    }
+
+    public function test_peserta_tidak_bisa_memuat_daftar_model(): void
+    {
+        $this->konfigurasi();
+
+        $this->actingAs($this->siswa)
+            ->postJson('/api/admin/ai-settings/models', [])
+            ->assertForbidden();
+    }
+
     /** @return array<string, mixed> */
     private function payload(array $override = []): array
     {
@@ -381,6 +524,9 @@ class AiChatTest extends TestCase
             'system_prompt' => AiSettingSeeder::personaKakakTingkat(),
             'max_tokens' => 2048,
             'temperature_x100' => 70,
+            'price_input_per_mtok' => 0.15,
+            'price_output_per_mtok' => 0.6,
+            'price_cached_per_mtok' => 0.0375,
             'daily_message_limit' => 30,
             'history_limit' => 10,
             'is_active' => false,
