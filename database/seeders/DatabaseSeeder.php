@@ -20,6 +20,7 @@ class DatabaseSeeder extends Seeder
             CpnsQuestionSeeder::class,
             PerguruanTinggiSeeder::class,
             ProofRequirementSeeder::class,
+            AiSettingSeeder::class,
             KedinasanSeeder::class,
             InstansiFormasiSeeder::class,
         ]);
