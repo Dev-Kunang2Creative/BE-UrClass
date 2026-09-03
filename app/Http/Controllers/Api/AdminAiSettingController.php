@@ -40,7 +40,7 @@ class AdminAiSettingController extends Controller
 
         $validated = $request->validate([
             'provider' => ['required', Rule::in(AiSetting::PROVIDERS)],
-            'endpoint' => ['required', 'string', 'max:255'],
+            'endpoint' => ['nullable', 'string', 'max:255'],
             // nullable, dan itu bukan kelalaian: form mengirim kolom kunci dalam
             // keadaan kosong ketika admin tidak ingin menggantinya.
             'api_key' => ['nullable', 'string', 'max:500'],
@@ -64,11 +64,18 @@ class AdminAiSettingController extends Controller
             'system_prompt.max' => 'Persona maksimal 20.000 karakter.',
         ]);
 
-        if ($alasan = SafeOutboundUrl::reject($validated['endpoint'])) {
-            return response()->json([
-                'message' => 'Validasi gagal',
-                'errors' => ['endpoint' => [$alasan]],
-            ], 422);
+        $endpointBaru = trim((string) ($validated['endpoint'] ?? ''));
+        unset($validated['endpoint']);
+
+        // Endpoint hanya ditulis kalau admin mengirim yang baru dan bukan mask.
+        if ($endpointBaru !== '' && ! str_contains($endpointBaru, '…')) {
+            if ($alasan = SafeOutboundUrl::reject($endpointBaru)) {
+                return response()->json([
+                    'message' => 'Validasi gagal',
+                    'errors' => ['endpoint' => [$alasan]],
+                ], 422);
+            }
+            $validated['endpoint'] = $endpointBaru;
         }
 
         $kunciBaru = trim((string) ($validated['api_key'] ?? ''));
@@ -85,10 +92,18 @@ class AdminAiSettingController extends Controller
             $validated['api_key'] = $kunciBaru;
         }
 
-        // Menyalakan tanpa kunci hanya menghasilkan asisten yang gagal di setiap
+        // Menyalakan tanpa endpoint atau kunci hanya menghasilkan asisten yang gagal di setiap
         // pesan, jadi ditolak di sini alih-alih dibiarkan gagal saat dipakai.
         $akanAktif = (bool) $validated['is_active'];
+        $adaEndpoint = array_key_exists('endpoint', $validated) || filled($setting->endpoint);
         $adaKunci = array_key_exists('api_key', $validated) || filled($setting->api_key);
+
+        if ($akanAktif && ! $adaEndpoint) {
+            return response()->json([
+                'message' => 'Validasi gagal',
+                'errors' => ['endpoint' => ['Isi endpoint dulu sebelum mengaktifkan asisten.']],
+            ], 422);
+        }
 
         if ($akanAktif && ! $adaKunci) {
             return response()->json([
@@ -100,15 +115,16 @@ class AdminAiSettingController extends Controller
         $setting->update($validated);
 
         // Yang dicatat: apa yang berubah, bukan nilainya. Log adalah tempat
-        // kunci paling sering bocor tanpa disadari.
+        // kunci dan endpoint paling sering bocor tanpa disadari.
         AuditLogger::log(
             'AiSetting',
             'update',
             sprintf(
-                'Pengaturan AI diubah: provider %s, model %s, %s%s',
+                'Pengaturan AI diubah: provider %s, model %s, %s%s%s',
                 $setting->provider,
                 $setting->model,
                 $setting->is_active ? 'aktif' : 'nonaktif',
+                array_key_exists('endpoint', $validated) ? ', endpoint diganti' : '',
                 array_key_exists('api_key', $validated) ? ', API key diganti' : '',
             ),
             $request->user(),
@@ -232,10 +248,13 @@ class AdminAiSettingController extends Controller
 
         $probe = $tersimpan->replicate();
         $probe->provider = $validated['provider'] ?? $tersimpan->provider;
-        $probe->endpoint = filled($validated['endpoint'] ?? null) ? trim($validated['endpoint']) : $tersimpan->endpoint;
         $probe->model = filled($validated['model'] ?? null) ? trim($validated['model']) : $tersimpan->model;
 
-        // Mask yang terkirim balik dari form bukan kunci; abaikan.
+        // Mask yang terkirim balik dari form bukan nilai asli; abaikan.
+        $endpointInput = trim((string) ($validated['endpoint'] ?? ''));
+        $endpointBaru = ($endpointInput !== '' && ! str_contains($endpointInput, '…')) ? $endpointInput : null;
+        $probe->endpoint = $endpointBaru ?? $tersimpan->endpoint;
+
         $kunci = trim((string) ($validated['api_key'] ?? ''));
         $kunciBaru = ($kunci !== '' && ! str_contains($kunci, '…')) ? $kunci : null;
 
@@ -266,7 +285,7 @@ class AdminAiSettingController extends Controller
         // Ini jebakan nyata: antarmuka justru menganjurkan mengosongkan kolom
         // kunci ("biarkan kosong kalau tidak ingin menggantinya"), sehingga
         // admin yang berpindah provider hampir pasti melakukannya.
-        if ($kunciBaru === null && $probe->endpoint !== $tersimpan->endpoint && filled($tersimpan->api_key)) {
+        if ($endpointBaru !== null && $endpointBaru !== $tersimpan->endpoint && $kunciBaru === null && filled($tersimpan->api_key)) {
             return response()->json([
                 'message' => 'Validasi gagal',
                 'errors' => ['api_key' => [
@@ -279,7 +298,7 @@ class AdminAiSettingController extends Controller
     }
 
     /**
-     * Bentuk yang dikirim ke panel admin. api_key diganti bentuk tersamar;
+     * Bentuk yang dikirim ke panel admin. api_key dan endpoint diganti bentuk tersamar;
      * nilai aslinya tidak pernah masuk ke respons mana pun.
      *
      * @return array<string, mixed>
@@ -288,7 +307,6 @@ class AdminAiSettingController extends Controller
     {
         return [
             'provider' => $setting->provider,
-            'endpoint' => $setting->endpoint,
             'model' => $setting->model,
             'system_prompt' => $setting->system_prompt,
             'max_tokens' => $setting->max_tokens,
@@ -299,6 +317,8 @@ class AdminAiSettingController extends Controller
             'daily_message_limit' => $setting->daily_message_limit,
             'history_limit' => $setting->history_limit,
             'is_active' => $setting->is_active,
+            'has_endpoint' => filled($setting->endpoint),
+            'endpoint_masked' => $setting->maskedEndpoint(),
             'has_api_key' => filled($setting->api_key),
             'api_key_masked' => $setting->maskedApiKey(),
             'providers' => AiSetting::PROVIDERS,

@@ -45,10 +45,11 @@ class AiSetting extends Model
     ];
 
     protected $casts = [
-        // Kuncinya APP_KEY. Kalau APP_KEY berganti, kunci lama tidak bisa
+        // Kuncinya APP_KEY. Kalau APP_KEY berganti, kunci dan endpoint lama tidak bisa
         // didekripsi lagi dan harus diisi ulang - itu memang perilaku yang
         // diinginkan, bukan kerusakan.
         'api_key' => 'encrypted',
+        'endpoint' => 'encrypted',
         'is_active' => 'boolean',
         'max_tokens' => 'integer',
         'temperature_x100' => 'integer',
@@ -103,6 +104,33 @@ class AiSetting extends Model
         }
 
         return mb_substr($key, 0, 6).'…'.mb_substr($key, -4);
+    }
+
+    /**
+     * Bentuk tersamar untuk panel admin: cukup untuk memastikan host/domain mana
+     * yang terpasang tanpa membocorkan subdomain atau path rahasia.
+     */
+    public function maskedEndpoint(): ?string
+    {
+        $url = $this->endpoint;
+
+        if (! $url) {
+            return null;
+        }
+
+        $parts = parse_url($url);
+        if (! $parts || empty($parts['host'])) {
+            return str_repeat('•', 12);
+        }
+
+        $scheme = $parts['scheme'] ?? 'https';
+        $host = $parts['host'];
+        $maskedHost = mb_strlen($host) <= 8
+            ? str_repeat('•', mb_strlen($host))
+            : mb_substr($host, 0, 4).'…'.mb_substr($host, -4);
+        $path = $parts['path'] ?? '';
+
+        return "{$scheme}://{$maskedHost}{$path}";
     }
 
     /** Sudah cukup lengkap untuk dipakai? */
