@@ -43,9 +43,9 @@ class AiUsageMonitoringTest extends TestCase
             'api_key' => 'sk-uji',
             'model' => 'openai/gpt-oss-120b',
             'is_active' => true,
-            'price_input_per_mtok' => 0.15,
-            'price_output_per_mtok' => 0.60,
-            'price_cached_per_mtok' => 0.0375,
+            'price_input_per_mtok' => 2400,
+            'price_output_per_mtok' => 9600,
+            'price_cached_per_mtok' => 600,
         ]);
     }
 
@@ -55,7 +55,7 @@ class AiUsageMonitoringTest extends TestCase
         AiUsageLog::create([
             'user_id' => $this->siswa->id, 'provider' => 'openai_compatible',
             'model' => 'm', 'input_tokens' => 100, 'output_tokens' => 20,
-            'cost_usd' => 0.001, 'status' => 'ok',
+            'cost_idr' => 16.0, 'status' => 'ok',
         ]);
 
         foreach (['today', '24h', '7d', '30d', '60d'] as $window) {
@@ -71,11 +71,11 @@ class AiUsageMonitoringTest extends TestCase
         $buat = fn (string $status, int $in, int $out, float $cost) => AiUsageLog::create([
             'user_id' => $this->siswa->id, 'provider' => 'openai_compatible', 'model' => 'm',
             'input_tokens' => $in, 'output_tokens' => $out, 'cached_tokens' => 0,
-            'cost_usd' => $cost, 'status' => $status, 'duration_ms' => 500,
+            'cost_idr' => $cost, 'status' => $status, 'duration_ms' => 500,
         ]);
 
-        $buat('ok', 1000, 200, 0.00027);
-        $buat('ok', 2000, 300, 0.00048);
+        $buat('ok', 1000, 200, 4.32);
+        $buat('ok', 2000, 300, 7.68);
         $buat('failed', 0, 0, 0);
         $buat('blocked', 0, 0, 0);
 
@@ -89,7 +89,7 @@ class AiUsageMonitoringTest extends TestCase
         $this->assertSame(1, $totals['blocked']);
         $this->assertSame(3000, $totals['input_tokens']);
         $this->assertSame(500, $totals['output_tokens']);
-        $this->assertSame(0.0008, round($totals['cost_usd'], 4));
+        $this->assertSame(12.0, round($totals['cost_idr'], 2));
         $this->assertSame(500, $totals['avg_duration_ms']);
     }
 
@@ -98,7 +98,7 @@ class AiUsageMonitoringTest extends TestCase
     {
         AiUsageLog::create([
             'user_id' => $this->siswa->id, 'provider' => 'openai_compatible', 'model' => 'm',
-            'input_tokens' => 10, 'output_tokens' => 5, 'cost_usd' => 0, 'status' => 'ok',
+            'input_tokens' => 10, 'output_tokens' => 5, 'cost_idr' => 0, 'status' => 'ok',
         ]);
 
         $series = $this->actingAs($this->admin)
@@ -126,8 +126,8 @@ class AiUsageMonitoringTest extends TestCase
         $this->actingAs($this->siswa)->postJson('/api/chat', ['message' => 'tes'])->assertOk();
 
         $log = AiUsageLog::first();
-        // 1 juta input @0.15 + 1 juta output @0.60 = 0.75
-        $this->assertSame(0.75, round($log->cost_usd, 4));
+        // 1 juta input @Rp2.400 + 1 juta output @Rp9.600 = Rp12.000
+        $this->assertSame(12000.0, round($log->cost_idr, 2));
 
         // Harga dinaikkan sepuluh kali; baris yang sudah ada tidak berubah.
         AiSetting::current()->update([
@@ -135,7 +135,7 @@ class AiUsageMonitoringTest extends TestCase
             'price_output_per_mtok' => 6.0,
         ]);
 
-        $this->assertSame(0.75, round($log->fresh()->cost_usd, 4));
+        $this->assertSame(12000.0, round($log->fresh()->cost_idr, 2));
     }
 
     /** Token cache dihargai terpisah, bukan dihitung dua kali. */
@@ -155,9 +155,9 @@ class AiUsageMonitoringTest extends TestCase
         $log = AiUsageLog::first();
         $this->assertSame(1_000_000, $log->input_tokens);
         $this->assertSame(800_000, $log->cached_tokens);
-        // 200rb input penuh @0.15 + 800rb cache @0.0375 = 0.03 + 0.03 = 0.06
-        // Kalau cache ikut dihargai penuh, hasilnya 0.18.
-        $this->assertSame(0.06, round($log->cost_usd, 4));
+        // 200rb input penuh @Rp2.400 = Rp480, 800rb cache @Rp600 = Rp480 -> Rp960.
+        // Kalau cache ikut dihargai penuh, hasilnya Rp2.400.
+        $this->assertSame(960.0, round($log->cost_idr, 2));
     }
 
     public function test_permintaan_gagal_tetap_tercatat(): void
@@ -169,7 +169,7 @@ class AiUsageMonitoringTest extends TestCase
         $log = AiUsageLog::first();
         $this->assertNotNull($log, 'permintaan gagal harus tetap tercatat');
         $this->assertSame('failed', $log->status);
-        $this->assertSame(0.0, round($log->cost_usd, 6));
+        $this->assertSame(0.0, round($log->cost_idr, 6));
     }
 
     public function test_kuota_habis_tercatat_sebagai_blocked(): void
@@ -198,27 +198,127 @@ class AiUsageMonitoringTest extends TestCase
         $this->assertStringNotContainsString('internal.gateway', (string) $log->reason);
     }
 
-    public function test_pemakai_terbanyak_dan_rincian_model(): void
+    public function test_pemakai_terbanyak_beserta_tokennya(): void
     {
         $lain = User::factory()->create(['role' => 'user', 'email' => 'lain@usage.test']);
 
         foreach (range(1, 3) as $i) {
             AiUsageLog::create([
                 'user_id' => $this->siswa->id, 'provider' => 'openai_compatible', 'model' => 'model-a',
-                'input_tokens' => 100, 'output_tokens' => 10, 'cost_usd' => 0.001, 'status' => 'ok',
+                'input_tokens' => 100, 'output_tokens' => 10, 'cost_idr' => 16.0, 'status' => 'ok',
             ]);
         }
         AiUsageLog::create([
             'user_id' => $lain->id, 'provider' => 'openai_compatible', 'model' => 'model-b',
-            'input_tokens' => 50, 'output_tokens' => 5, 'cost_usd' => 0.0005, 'status' => 'ok',
+            'input_tokens' => 50, 'output_tokens' => 5, 'cost_idr' => 8.0, 'status' => 'ok',
         ]);
 
         $data = $this->actingAs($this->admin)->getJson('/api/admin/ai-usage?window=24h')->json('data');
 
         $this->assertSame('siswa@usage.test', $data['top_users'][0]['email']);
         $this->assertSame(3, $data['top_users'][0]['requests']);
-        $this->assertSame('model-a', $data['by_model'][0]['model']);
-        $this->assertSame(330, $data['by_model'][0]['total_tokens']);
+        // Token ikut dilaporkan per pemakai - itu yang membedakan pemakai yang
+        // banyak bertanya pendek dari yang sedikit tapi mahal.
+        $this->assertSame(330, $data['top_users'][0]['total_tokens']);
+
+        // Rincian per model dihapus dari laporan.
+        $this->assertArrayNotHasKey('by_model', $data);
+    }
+
+    /** Daftar pemakai terbanyak dibatasi sepuluh baris. */
+    public function test_daftar_dibatasi_sepuluh_baris(): void
+    {
+        // 12 pengguna, masing-masing satu permintaan.
+        foreach (range(1, 12) as $i) {
+            $user = User::factory()->create(['role' => 'user', 'email' => "p{$i}@usage.test"]);
+
+            AiUsageLog::create([
+                'user_id' => $user->id, 'provider' => 'openai_compatible', 'model' => 'm',
+                'input_tokens' => 100 * $i, 'output_tokens' => 10, 'cost_idr' => $i,
+                'status' => 'ok',
+            ]);
+        }
+
+        $data = $this->actingAs($this->admin)->getJson('/api/admin/ai-usage?window=24h')->json('data');
+
+        $this->assertCount(10, $data['top_users']);
+        // Permintaan terakhir tidak lagi dilayani endpoint ini - panel pemakaian
+        // langsung punya daftarnya sendiri, dan satu daftar cukup satu sumber.
+        $this->assertArrayNotHasKey('recent', $data);
+    }
+
+    /** Jendela 7 hari boleh dilihat per jam, supaya jam puncak bisa dicari. */
+    public function test_tujuh_hari_bisa_dikelompokkan_per_jam(): void
+    {
+        AiUsageLog::create([
+            'user_id' => $this->siswa->id, 'provider' => 'openai_compatible', 'model' => 'm',
+            'input_tokens' => 100, 'output_tokens' => 20, 'cost_idr' => 1, 'status' => 'ok',
+        ]);
+
+        $harian = $this->actingAs($this->admin)->getJson('/api/admin/ai-usage?window=7d');
+        $harian->assertOk()->assertJsonPath('data.bucket', 'day');
+
+        $perJam = $this->actingAs($this->admin)->getJson('/api/admin/ai-usage?window=7d&bucket=hour');
+        $perJam->assertOk()->assertJsonPath('data.bucket', 'hour');
+
+        // 7 hari per jam jauh lebih banyak titik daripada per hari.
+        $this->assertGreaterThan(150, count($perJam->json('data.series')));
+        $this->assertLessThan(12, count($harian->json('data.series')));
+    }
+
+    /**
+     * Jendela panjang menolak per jam dengan turun ke harian, bukan menggagalkan
+     * permintaan - antarmuka bisa masih mengirim pilihan lama saat jendelanya
+     * berganti.
+     */
+    public function test_jendela_panjang_turun_ke_harian(): void
+    {
+        $this->actingAs($this->admin)
+            ->getJson('/api/admin/ai-usage?window=60d&bucket=hour')
+            ->assertOk()
+            ->assertJsonPath('data.bucket', 'day');
+    }
+
+    /** Puncaknya dilaporkan server, dari seri yang sama dengan grafiknya. */
+    public function test_puncak_dilaporkan_dari_seri_yang_sama(): void
+    {
+        // Sepi.
+        AiUsageLog::create([
+            'user_id' => $this->siswa->id, 'provider' => 'openai_compatible', 'model' => 'm',
+            'input_tokens' => 100, 'output_tokens' => 10, 'cost_idr' => 1, 'status' => 'ok',
+            'created_at' => now()->subHours(5),
+        ]);
+        // Ramai.
+        AiUsageLog::create([
+            'user_id' => $this->siswa->id, 'provider' => 'openai_compatible', 'model' => 'm',
+            'input_tokens' => 9000, 'output_tokens' => 900, 'cost_idr' => 50, 'status' => 'ok',
+            'created_at' => now()->subHours(2),
+        ]);
+
+        $data = $this->actingAs($this->admin)
+            ->getJson('/api/admin/ai-usage?window=24h&bucket=hour')
+            ->json('data');
+
+        $this->assertNotNull($data['peak']);
+        $this->assertSame(9900, $data['peak']['total_tokens']);
+
+        // Puncaknya benar-benar salah satu titik di seri, bukan angka terpisah.
+        $this->assertContains($data['peak'], $data['series']);
+    }
+
+    public function test_tanpa_pemakaian_puncaknya_null(): void
+    {
+        $this->actingAs($this->admin)
+            ->getJson('/api/admin/ai-usage?window=24h')
+            ->assertOk()
+            ->assertJsonPath('data.peak', null);
+    }
+
+    public function test_bucket_tak_dikenal_ditolak(): void
+    {
+        $this->actingAs($this->admin)
+            ->getJson('/api/admin/ai-usage?bucket=menit')
+            ->assertStatus(422)->assertJsonValidationErrors('bucket');
     }
 
     public function test_peserta_tidak_bisa_membaca_pemantauan(): void

@@ -2,6 +2,8 @@
 
 use App\Http\Controllers\Api\AccessCodeController;
 use App\Http\Controllers\Api\AdminAiSettingController;
+use App\Http\Controllers\Api\AdminAiLiveController;
+use App\Http\Controllers\Api\AdminAiQuotaController;
 use App\Http\Controllers\Api\AdminAiUsageController;
 use App\Http\Controllers\Api\AdminFormasiImportController;
 use App\Http\Controllers\Api\AdminDummyParticipantController;
@@ -157,6 +159,11 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::get('/users', [AdminUserController::class, 'index']);
         Route::get('/users/export', [AdminUserController::class, 'export']);
         Route::get('/users/{user}', [AdminUserController::class, 'show']);
+        // Penyesuaian tiket tangan. Throttle-nya ketat: ini mengubah sesuatu
+        // yang bernilai uang bagi peserta, dan tidak ada alasan sah untuk
+        // melakukannya berulang kali dalam semenit.
+        Route::post('/users/{user}/tickets', [AdminUserController::class, 'adjustTickets'])
+            ->middleware('throttle:20,1');
         Route::delete('/users/{user}', [AdminUserController::class, 'destroy']);
 
         // --- SUBTEST & MASTER SOAL ---
@@ -194,6 +201,13 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::post('/ai-settings/test', [AdminAiSettingController::class, 'test'])->middleware('throttle:10,1');
         Route::post('/ai-settings/models', [AdminAiSettingController::class, 'models'])->middleware('throttle:20,1');
         Route::get('/ai-usage', [AdminAiUsageController::class, 'index']);
+        // Pemakaian yang sedang berlangsung. Throttle-nya longgar karena
+        // halamannya menyegarkan diri setiap beberapa detik, dan seluruh
+        // datanya berasal dari database sendiri - bukan dari provider.
+        Route::get('/ai-live', [AdminAiLiveController::class, 'index'])->middleware('throttle:240,1');
+        // Kuota dibaca dari provider, jadi throttle-nya lebih ketat daripada
+        // laporan yang dihitung dari database sendiri.
+        Route::get('/ai-quota', [AdminAiQuotaController::class, 'show'])->middleware('throttle:30,1');
 
         Route::get('/proof-requirements', [ProofRequirementController::class, 'adminIndex']);
         Route::post('/proof-requirements', [ProofRequirementController::class, 'store']);

@@ -103,6 +103,11 @@ class User extends Authenticatable
         $this->attributes['target_major_2'] = $value !== null ? strip_tags(trim($value)) : $value;
     }
 
+    public function aiUsageLogs()
+    {
+        return $this->hasMany(AiUsageLog::class);
+    }
+
     public function createdTryouts()
     {
         return $this->hasMany(Tryout::class, 'created_by');
