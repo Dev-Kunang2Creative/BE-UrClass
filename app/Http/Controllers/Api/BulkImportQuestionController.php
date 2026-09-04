@@ -26,7 +26,7 @@ use PhpOffice\PhpSpreadsheet\Worksheet\MemoryDrawing;
 
 class BulkImportQuestionController extends Controller
 {
-    // Kolom XLSX: Gambar | Soal | Opsi A-E | Kunci Jawaban | Pembahasan | Skor A-E
+    // Kolom XLSX: Gambar | Soal | Opsi A-E | Kunci Jawaban | Pembahasan | Gambar Pembahasan | Skor A-E
     //
     // Lima kolom Skor A-E hanya dipakai subtes berskema option_weight (TKP SKD),
     // yang di sana wajib diisi 1-5 dan menggantikan kolom Kunci Jawaban.
@@ -63,28 +63,19 @@ class BulkImportQuestionController extends Controller
     }
 
     // -------------------------------------------------------------------------
-    // Excel Import (format baru)
-    // Kolom: Gambar | Soal | Opsi A | Opsi B | Opsi C | Opsi D | Opsi E | Kunci | Pembahasan
+    // Excel Import (format baru dengan kolom Gambar Pembahasan)
+    // Kolom: Gambar | Soal | Opsi A | Opsi B | Opsi C | Opsi D | Opsi E | Kunci | Pembahasan | Gambar Pembahasan
     // -------------------------------------------------------------------------
     private function importFromExcel(UploadedFile $file, Subtest $subtest): array
     {
         $spreadsheet = IOFactory::load($file->getRealPath());
         $sheet       = $spreadsheet->getActiveSheet();
 
-        // Bangun map: rowNumber → Drawing (untuk gambar embedded)
-        $imageByRow = [];
-        foreach ($sheet->getDrawingCollection() as $drawing) {
-            preg_match('/(\d+)$/', $drawing->getCoordinates(), $m);
-            if (!empty($m[1])) {
-                $imageByRow[(int) $m[1]] = $drawing;
-            }
-        }
-
-        // Ambil semua baris sebagai array (1-indexed)
+        // Ambil semua baris sebagai array (1-indexed), iterasi hingga kolom O
         $allRows = [];
         foreach ($sheet->getRowIterator() as $row) {
             $cells = [];
-            foreach ($row->getCellIterator('A', 'N') as $cell) {
+            foreach ($row->getCellIterator('A', 'O') as $cell) {
                 $cells[] = $this->cellToHtml($cell);
             }
             $allRows[$row->getRowIndex()] = $cells;
@@ -99,7 +90,42 @@ class BulkImportQuestionController extends Controller
         $firstKey  = array_key_first($allRows);
         $isHeader  = stripos($firstRow[1] ?? '', 'soal') !== false
                   || stripos($firstRow[0] ?? '', 'gambar') !== false;
-        if ($isHeader) unset($allRows[$firstKey]);
+
+        $hasDiscussionImageCol = false;
+        $discussionImageColLetter = 'J';
+
+        if ($isHeader && is_array($firstRow)) {
+            foreach ($firstRow as $idx => $headerText) {
+                $cleaned = strtolower(strip_tags($headerText));
+                if (str_contains($cleaned, 'gambar pembahasan') || str_contains($cleaned, 'ilustrasi pembahasan')) {
+                    $hasDiscussionImageCol = true;
+                    $discussionImageColLetter = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($idx + 1);
+                    break;
+                }
+            }
+            unset($allRows[$firstKey]);
+        } else {
+            // Jika file tanpa baris header, default anggap ada kolom Gambar Pembahasan jika kolom J bukan angka skor
+            $hasDiscussionImageCol = true;
+        }
+
+        // Bangun map: rowNumber → Drawing (dipisah antara gambar soal dan gambar pembahasan)
+        $questionImagesByRow = [];
+        $discussionImagesByRow = [];
+
+        foreach ($sheet->getDrawingCollection() as $drawing) {
+            $coords = $drawing->getCoordinates();
+            if (preg_match('/^([A-Z]+)(\d+)$/i', $coords, $m)) {
+                $col = strtoupper($m[1]);
+                $row = (int) $m[2];
+
+                if ($col === 'A') {
+                    $questionImagesByRow[$row] = $drawing;
+                } elseif ($col === $discussionImageColLetter || ($hasDiscussionImageCol && $col === 'J')) {
+                    $discussionImagesByRow[$row] = $drawing;
+                }
+            }
+        }
 
         $errors   = [];
         $imported = 0;
@@ -108,6 +134,11 @@ class BulkImportQuestionController extends Controller
         $maxQ     = $subtest->max_questions;
         $currentQ = Question::where('subtest_id', $subtest->id)->count();
         $startNo  = $currentQ + 1;
+
+        // Kolom skor: K-O (index 10-14) pada template baru, atau J-N (index 9-13) pada template lama
+        $scoreIndices = $hasDiscussionImageCol
+            ? ['A' => 10, 'B' => 11, 'C' => 12, 'D' => 13, 'E' => 14]
+            : ['A' => 9,  'B' => 10, 'C' => 11, 'D' => 12, 'E' => 13];
 
         foreach ($allRows as $rowNum => $cells) {
             $lineNo = $rowNum;
@@ -123,10 +154,10 @@ class BulkImportQuestionController extends Controller
             $correctAnswer = strtoupper(strip_tags($cells[7] ?? ''));
             $discussion    = $cells[8] ?? '';
 
-            // Kolom J-N. Kosong berarti "tidak diisi", bukan nol - nol bukan
+            // Kosong berarti "tidak diisi", bukan nol - nol bukan
             // nilai yang sah pada skema bobot per opsi.
             $optionScores = [];
-            foreach (['A' => 9, 'B' => 10, 'C' => 11, 'D' => 12, 'E' => 13] as $key => $index) {
+            foreach ($scoreIndices as $key => $index) {
                 $raw = trim(strip_tags($cells[$index] ?? ''));
                 $optionScores[$key] = $raw === '' ? null : $raw;
             }
@@ -181,21 +212,27 @@ class BulkImportQuestionController extends Controller
 
             // Ekstrak gambar jika ada di baris ini
             $imagePath = null;
-            if (isset($imageByRow[$rowNum])) {
-                $imagePath = $this->extractAndStoreImage($imageByRow[$rowNum], $lineNo, $errors);
+            if (isset($questionImagesByRow[$rowNum])) {
+                $imagePath = $this->extractAndStoreImage($questionImagesByRow[$rowNum], $lineNo, $errors, 'questions');
+            }
+
+            $discussionImagePath = null;
+            if (isset($discussionImagesByRow[$rowNum])) {
+                $discussionImagePath = $this->extractAndStoreImage($discussionImagesByRow[$rowNum], $lineNo, $errors, 'discussion-images');
             }
 
             $orderNo = $startNo + $imported;
-            DB::transaction(function () use ($subtest, $questionText, $answerA, $answerB, $answerC, $answerD, $answerE, $discussion, $correctAnswer, $questionType, $imagePath, $orderNo, $optionScores) {
+            DB::transaction(function () use ($subtest, $questionText, $answerA, $answerB, $answerC, $answerD, $answerE, $discussion, $discussionImagePath, $correctAnswer, $questionType, $imagePath, $orderNo, $optionScores) {
                 $question = Question::create([
-                    'subtest_id'     => $subtest->id,
-                    'question_type'  => $questionType,
-                    'question_text'  => RichTextSanitizer::sanitize($questionText),
-                    'question_image' => $imagePath,
-                    'discussion'     => RichTextSanitizer::sanitize($discussion),
-                    'correct_answer' => $questionType === 'essay' ? null : $correctAnswer,
-                    'order_no'       => $orderNo,
-                    'is_active'      => true,
+                    'subtest_id'       => $subtest->id,
+                    'question_type'    => $questionType,
+                    'question_text'    => RichTextSanitizer::sanitize($questionText),
+                    'question_image'   => $imagePath,
+                    'discussion'       => RichTextSanitizer::sanitize($discussion),
+                    'discussion_image' => $discussionImagePath,
+                    'correct_answer'   => $questionType === 'essay' ? null : $correctAnswer,
+                    'order_no'         => $orderNo,
+                    'is_active'        => true,
                 ]);
 
                 if ($questionType === 'essay') {
@@ -231,7 +268,7 @@ class BulkImportQuestionController extends Controller
     // Ekstrak satu gambar dari Drawing object → simpan ke storage/public
     // Mengembalikan relative path (untuk disimpan ke DB) atau null jika gagal
     // -------------------------------------------------------------------------
-    private function extractAndStoreImage(Drawing|MemoryDrawing $drawing, int $lineNo, array &$errors): ?string
+    private function extractAndStoreImage(Drawing|MemoryDrawing $drawing, int $lineNo, array &$errors, string $folder = 'questions'): ?string
     {
         try {
             if ($drawing instanceof MemoryDrawing) {
@@ -264,7 +301,7 @@ class BulkImportQuestionController extends Controller
                 return null;
             }
 
-            $storagePath = 'questions/' . Str::ulid() . '.' . $ext;
+            $storagePath = $folder . '/' . Str::ulid() . '.' . $ext;
             Storage::disk('public')->put($storagePath, $content);
 
             return $storagePath;
@@ -340,6 +377,7 @@ class BulkImportQuestionController extends Controller
             'Gambar', 'Soal', 'Opsi A', 'Opsi B', 'Opsi C', 'Opsi D', 'Opsi E',
             $weighted ? 'Kunci Jawaban (diabaikan)' : 'Kunci Jawaban',
             'Pembahasan',
+            'Gambar Pembahasan',
         ];
 
         if ($weighted) {
@@ -348,7 +386,7 @@ class BulkImportQuestionController extends Controller
 
         $sheet->fromArray($headers, null, 'A1');
 
-        $lastColumn = $weighted ? 'N' : 'I';
+        $lastColumn = $weighted ? 'O' : 'J';
 
         $sheet->getStyle("A1:{$lastColumn}1")->applyFromArray([
             'font' => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
@@ -358,7 +396,7 @@ class BulkImportQuestionController extends Controller
         if ($weighted) {
             // Lima kolom bobot dibedakan warnanya karena di sinilah nilainya
             // ditentukan, dan kolom kunci jawaban diredupkan karena tidak dibaca.
-            $sheet->getStyle('J1:N1')->applyFromArray([
+            $sheet->getStyle('K1:O1')->applyFromArray([
                 'fill' => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FFC2410C']],
             ]);
             $sheet->getStyle('H1')->applyFromArray([
@@ -377,6 +415,7 @@ class BulkImportQuestionController extends Controller
                 'Meminta rekan lain yang mengerjakan',
                 '',
                 'Bobot mengukur profesionalisme dan tanggung jawab.',
+                '',
                 1, 2, 3, 5, 4,
             ], null, 'A2');
 
@@ -387,6 +426,7 @@ class BulkImportQuestionController extends Controller
                 '- Kolom Kunci Jawaban diabaikan: jawaban "benar" adalah opsi berbobot 5',
                 '- Semua opsi A-E wajib diisi; tidak ada soal esai pada skema ini',
                 '- Kolom Gambar: embed gambar langsung ke cell (Insert -> Pictures -> Place in Cell)',
+                '- Kolom Gambar Pembahasan: embed gambar pembahasan langsung ke cell (opsional)',
                 '- Baris pertama adalah header, data mulai dari baris 2',
                 '- Format gambar yang didukung: jpg, jpeg, png, webp',
             ];
@@ -397,6 +437,7 @@ class BulkImportQuestionController extends Controller
                 'Tiga', 'Empat', 'Lima', 'Enam', 'Tujuh',
                 'B',
                 'Operasi penjumlahan dasar: 2 + 2 = 4',
+                '',
             ], null, 'A2');
 
             $notes = [
@@ -404,6 +445,7 @@ class BulkImportQuestionController extends Controller
                 '- Kunci Jawaban hanya boleh: A, B, C, D, atau E',
                 '- Kosongkan Kunci Jawaban untuk membuat soal Essay; opsi A-E boleh kosong',
                 '- Kolom Gambar: embed gambar langsung ke cell (Insert -> Pictures -> Place in Cell)',
+                '- Kolom Gambar Pembahasan: embed gambar pembahasan langsung ke cell (opsional)',
                 '- Baris pertama adalah header, data mulai dari baris 2',
                 '- Format gambar yang didukung: jpg, jpeg, png, webp',
             ];
