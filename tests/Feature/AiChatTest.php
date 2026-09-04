@@ -73,7 +73,20 @@ class AiChatTest extends TestCase
         $this->assertSame(self::KUNCI, AiSetting::current()->api_key);
     }
 
-    /** Endpoint admin tidak pernah mengirim kunci aslinya, hanya bentuk tersamar. */
+    /** Endpoint tersimpan terenkripsi: kolom mentahnya tidak memuat URL aslinya. */
+    public function test_endpoint_terenkripsi_di_database(): void
+    {
+        $this->konfigurasi();
+
+        $mentah = DB::table('ai_settings')->value('endpoint');
+
+        $this->assertNotSame('https://openrouter.ai/api/v1', $mentah);
+        $this->assertStringNotContainsString('openrouter.ai', (string) $mentah);
+        // Tapi tetap bisa dibaca aplikasi.
+        $this->assertSame('https://openrouter.ai/api/v1', AiSetting::current()->endpoint);
+    }
+
+    /** Endpoint admin tidak pernah mengirim kunci maupun endpoint aslinya, hanya bentuk tersamar. */
     public function test_pengaturan_admin_tidak_mengirim_kunci_asli(): void
     {
         $this->konfigurasi();
@@ -83,9 +96,12 @@ class AiChatTest extends TestCase
         $response->assertOk();
         $this->assertStringNotContainsString(self::KUNCI, $response->getContent());
         $this->assertStringNotContainsString('rahasia-sekali', $response->getContent());
+        $this->assertStringNotContainsString('openrouter.ai/api/v1', $response->getContent());
 
         $response->assertJsonPath('data.has_api_key', true);
         $this->assertSame('sk-or-…4f2a', $response->json('data.api_key_masked'));
+        $response->assertJsonPath('data.has_endpoint', true);
+        $this->assertSame('https://open…r.ai/api/v1', $response->json('data.endpoint_masked'));
     }
 
     /** Respons chat tidak memuat kunci maupun endpoint. */
@@ -218,6 +234,48 @@ class AiChatTest extends TestCase
         ]));
 
         $response->assertStatus(422)->assertJsonValidationErrors('api_key');
+    }
+
+    /** Menyimpan tanpa mengisi kolom endpoint mempertahankan endpoint yang ada. */
+    public function test_menyimpan_tanpa_endpoint_tidak_menghapus_endpoint_lama(): void
+    {
+        $this->konfigurasi();
+
+        $this->actingAs($this->admin)->putJson('/api/admin/ai-settings', $this->payload([
+            'model' => 'model/baru',
+            'endpoint' => '',
+        ]))->assertOk();
+
+        $setting = AiSetting::current();
+        $this->assertSame('https://openrouter.ai/api/v1', $setting->endpoint);
+        $this->assertSame('model/baru', $setting->model);
+    }
+
+    /** Mengirim balik bentuk tersamar endpoint tidak menimpanya jadi endpoint. */
+    public function test_mask_yang_dikirim_balik_tidak_tersimpan_sebagai_endpoint(): void
+    {
+        $this->konfigurasi();
+
+        $this->actingAs($this->admin)->putJson('/api/admin/ai-settings', $this->payload([
+            'endpoint' => 'https://open…i.ai',
+        ]))->assertOk();
+
+        $this->assertSame('https://openrouter.ai/api/v1', AiSetting::current()->endpoint);
+    }
+
+    /** Menyalakan tanpa endpoint ditolak, bukan dibiarkan gagal saat dipakai. */
+    public function test_tidak_bisa_diaktifkan_tanpa_endpoint(): void
+    {
+        // Kosongkan endpoint
+        AiSetting::current()->update(['endpoint' => null]);
+
+        $response = $this->actingAs($this->admin)->putJson('/api/admin/ai-settings', $this->payload([
+            'endpoint' => '',
+            'api_key' => self::KUNCI,
+            'is_active' => true,
+        ]));
+
+        $response->assertStatus(422)->assertJsonValidationErrors('endpoint');
     }
 
     // ---------------------------------------------------------------

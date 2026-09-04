@@ -37,6 +37,18 @@ class ScoringService
      */
     public const CPNS_SCORE_CORRECT = 5;
 
+    public const SKD_PASSING_GRADES = [
+        'twk' => 65,
+        'tiu' => 80,
+        'tkp' => 166,
+    ];
+
+    public const FULL_SKD_QUESTION_COUNTS = [
+        'twk' => 30,
+        'tiu' => 35,
+        'tkp' => 45,
+    ];
+
     /**
      * Skema penilaian ditentukan jalurnya, bukan dipilih bebas:
      *   UTBK            -> IRT selalu
@@ -268,6 +280,173 @@ class ScoringService
     }
 
     /**
+     * Tryout Full SKD hanya CPNS dengan komposisi aktif 30 TWK, 35 TIU,
+     * dan 45 TKP. Pemeriksaan per kategori mencegah tryout mini yang kebetulan
+     * berjumlah 110 soal menerima aturan kelulusan SKD.
+     */
+    public static function isFullSkd(Tryout $tryout): bool
+    {
+        return self::fullSkdSubtests($tryout) !== null;
+    }
+
+    /**
+     * Hitung status kelulusan Full SKD untuk satu sesi.
+     *
+     * @return array{
+     *   is_passed_skd: bool,
+     *   scores: array{twk: float, tiu: float, tkp: float},
+     *   passing_grades: array{twk: int, tiu: int, tkp: int},
+     *   subtests: array<string, array{score: float, passing_grade: int, is_passed: bool}>
+     * }
+     */
+    public static function calculateSkdPassingStatus(TryoutSession $session): array
+    {
+        $tryout = $session->tryout;
+
+        if (! $tryout) {
+            return self::buildSkdPassingStatus([]);
+        }
+
+        return self::skdPassingStatuses($tryout, [$session->id])[(string) $session->id]
+            ?? self::buildSkdPassingStatus([]);
+    }
+
+    /**
+     * Skor dan status SKD banyak sesi dalam satu agregasi database.
+     *
+     * @param  iterable<string>  $sessionIds
+     * @return array<string, array{
+     *   is_passed_skd: bool,
+     *   scores: array{twk: float, tiu: float, tkp: float},
+     *   passing_grades: array{twk: int, tiu: int, tkp: int},
+     *   subtests: array<string, array{score: float, passing_grade: int, is_passed: bool}>
+     * }>
+     */
+    public static function skdPassingStatuses(Tryout $tryout, iterable $sessionIds): array
+    {
+        $ids = collect($sessionIds)->filter()->unique()->values();
+        $subtests = self::fullSkdSubtests($tryout);
+
+        if ($ids->isEmpty() || $subtests === null) {
+            return [];
+        }
+
+        $categoryBySubtest = [];
+        foreach ($subtests as $category => $subtestIds) {
+            foreach ($subtestIds as $subtestId) {
+                $categoryBySubtest[(string) $subtestId] = $category;
+            }
+        }
+
+        $rows = UserAnswer::query()
+            ->join('questions', 'questions.id', '=', 'user_answers.question_id')
+            ->whereIn('user_answers.tryout_session_id', $ids)
+            ->whereIn('questions.subtest_id', array_keys($categoryBySubtest))
+            ->selectRaw('user_answers.tryout_session_id as sid')
+            ->selectRaw('questions.subtest_id as subtest_id')
+            ->selectRaw('COALESCE(SUM(user_answers.score), 0) as raw_score')
+            ->groupBy('user_answers.tryout_session_id', 'questions.subtest_id')
+            ->get();
+
+        $scoresBySession = [];
+        foreach ($ids as $sessionId) {
+            $scoresBySession[(string) $sessionId] = [];
+        }
+
+        foreach ($rows as $row) {
+            $category = $categoryBySubtest[(string) $row->subtest_id] ?? null;
+            if (! $category) {
+                continue;
+            }
+
+            $sid = (string) $row->sid;
+            $scoresBySession[$sid][$category] =
+                ($scoresBySession[$sid][$category] ?? 0.0) + (float) $row->raw_score;
+        }
+
+        return collect($scoresBySession)
+            ->map(fn (array $scores) => self::buildSkdPassingStatus($scores))
+            ->all();
+    }
+
+    /**
+     * @return array<string, array<int, string>>|null
+     */
+    private static function fullSkdSubtests(Tryout $tryout): ?array
+    {
+        if (strtolower(trim((string) $tryout->kategori)) !== 'cpns') {
+            return null;
+        }
+
+        $subtests = $tryout->tryoutSubtests()
+            ->where('tryout_subtests.is_active', true)
+            ->join('subtests', 'subtests.id', '=', 'tryout_subtests.subtest_id')
+            ->get([
+                'subtests.id',
+                'subtests.category',
+            ]);
+
+        if ($subtests->isEmpty()) {
+            return null;
+        }
+
+        $counts = Question::query()
+            ->whereIn('subtest_id', $subtests->pluck('id'))
+            ->where('is_active', true)
+            ->selectRaw('subtest_id, COUNT(*) as total')
+            ->groupBy('subtest_id')
+            ->pluck('total', 'subtest_id');
+
+        $idsByCategory = ['twk' => [], 'tiu' => [], 'tkp' => []];
+        $countsByCategory = ['twk' => 0, 'tiu' => 0, 'tkp' => 0];
+        $totalQuestions = 0;
+
+        foreach ($subtests as $subtest) {
+            $count = (int) ($counts[$subtest->id] ?? 0);
+            $totalQuestions += $count;
+            $category = strtolower(trim((string) $subtest->category));
+
+            if (! array_key_exists($category, $idsByCategory)) {
+                continue;
+            }
+
+            $idsByCategory[$category][] = (string) $subtest->id;
+            $countsByCategory[$category] += $count;
+        }
+
+        if ($totalQuestions !== array_sum(self::FULL_SKD_QUESTION_COUNTS)
+            || $countsByCategory !== self::FULL_SKD_QUESTION_COUNTS) {
+            return null;
+        }
+
+        return $idsByCategory;
+    }
+
+    private static function buildSkdPassingStatus(array $scores): array
+    {
+        $normalized = [];
+        $subtests = [];
+
+        foreach (self::SKD_PASSING_GRADES as $category => $passingGrade) {
+            $score = round((float) ($scores[$category] ?? 0), 2);
+            $isPassed = $score >= $passingGrade;
+            $normalized[$category] = $score;
+            $subtests[$category] = [
+                'score' => $score,
+                'passing_grade' => $passingGrade,
+                'is_passed' => $isPassed,
+            ];
+        }
+
+        return [
+            'is_passed_skd' => collect($subtests)->every(fn (array $subtest) => $subtest['is_passed']),
+            'scores' => $normalized,
+            'passing_grades' => self::SKD_PASSING_GRADES,
+            'subtests' => $subtests,
+        ];
+    }
+
+    /**
      * Skor per subtest untuk satu sesi.
      *
      * Dipakai halaman hasil: peserta CPNS dinilai per ambang (TWK/TIU/TKP), dan
@@ -278,8 +457,8 @@ class ScoringService
      * maxScoreForQuestion yang sama dengan maxScoreForSession, supaya rincian
      * ini tidak mungkin berbeda dari totalnya.
      *
-     * Ambang lulus sengaja tidak dihitung di sini - itu urusan tampilan, dan
-     * menaruhnya di dua tempat berarti dua tempat yang bisa basi.
+     * Ambang lulus tidak dihitung oleh breakdown generik ini. Full SKD memakai
+     * calculateSkdPassingStatus(), sehingga tryout mini tidak menerima vonis.
      */
     public static function perSubtestBreakdown(TryoutSession $session): array
     {

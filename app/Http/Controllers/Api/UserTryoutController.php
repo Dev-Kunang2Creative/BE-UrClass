@@ -892,6 +892,10 @@ class UserTryoutController extends Controller
         $isCpns = $tryout->kategori === 'cpns';
         $simpleFinalScore = $isCpns ? $rawPoints : ($maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0);
         $simpleMaxScore = $isCpns ? $maxPoints : 1000;
+        $isFullSkd = ScoringService::isFullSkd($tryout);
+        $skdStatus = $isFullSkd
+            ? ScoringService::calculateSkdPassingStatus($session)
+            : null;
 
         $baseData = [
             'tryout_id' => $tryout->id,
@@ -901,6 +905,11 @@ class UserTryoutController extends Controller
             'status' => $session->status,
             'started_at' => $session->started_at,
             'finished_at' => $session->finished_at,
+            'is_full_skd' => $isFullSkd,
+            'is_passed_skd' => $skdStatus['is_passed_skd'] ?? null,
+            'skd_scores' => $skdStatus['scores'] ?? null,
+            'skd_passing_grades' => $skdStatus['passing_grades'] ?? null,
+            'skd_subtests' => $skdStatus['subtests'] ?? null,
             'summary' => [
                 'total_questions' => $totalQuestions,
                 'answered' => $answered,
@@ -1085,8 +1094,13 @@ class UserTryoutController extends Controller
             ? ScoringService::irtRawScores($sessionIds, $questionWeights)
             : [];
 
+        $isFullSkd = ScoringService::isFullSkd($tryout);
+        $skdStatuses = $isFullSkd
+            ? ScoringService::skdPassingStatuses($tryout, $sessionIds)
+            : [];
+
         $leaderboard = $sessions
-            ->map(function ($session) use ($totalQuestions, $tryout, $totalWeightAll, $includeProofImages, $proofsByUser, $aggregates, $irtRawScores, $maxPointsTryout) {
+            ->map(function ($session) use ($totalQuestions, $tryout, $totalWeightAll, $includeProofImages, $proofsByUser, $aggregates, $irtRawScores, $maxPointsTryout, $isFullSkd, $skdStatuses) {
                 $agg = $aggregates[(string) $session->id] ?? [
                     'answered' => 0, 'correct' => 0, 'wrong' => 0, 'raw_score' => 0.0,
                 ];
@@ -1146,29 +1160,17 @@ class UserTryoutController extends Controller
                         ->all();
                 }
 
-                return $row;
-            })
-            // Satu baris per peserta: percobaan dengan skor tertinggi. Peserta
-            // yang mengulang tryout dinilai dari hasil terbaiknya, bukan dari
-            // percobaan pertamanya, dan tidak muncul berkali-kali di papan.
-            ->groupBy('user_id')
-            ->map(fn ($rows) => $rows->sortBy([
-                ['score.final_score', 'desc'],
-                ['summary.correct', 'desc'],
-                ['finished_at', 'asc'],
-            ])->first())
-            ->values()
-            ->sortBy([
-                ['score.final_score', 'desc'],
-                ['summary.correct', 'desc'],
-                ['finished_at', 'asc'],
-            ])
-            ->values()
-            ->map(function ($row, $index) {
-                $row['rank'] = $index + 1;
+                if ($isFullSkd) {
+                    $status = $skdStatuses[(string) $session->id];
+                    $row['is_passed'] = $status['is_passed_skd'];
+                    $row['twk_score'] = $status['scores']['twk'];
+                    $row['tiu_score'] = $status['scores']['tiu'];
+                    $row['tkp_score'] = $status['scores']['tkp'];
+                }
 
                 return $row;
-            });
+            })
+            ->pipe(fn ($rows) => RankingService::rankBestAttempts($rows, $isFullSkd));
 
         // Posisi peserta yang sedang melihat, pada level yang diminta
         $myRank = null;
@@ -1190,6 +1192,7 @@ class UserTryoutController extends Controller
                 'tryout_id' => $tryout->id,
                 'tryout_title' => $tryout->title,
                 'use_irt' => $tryout->use_irt,
+                'is_full_skd' => $isFullSkd,
                 'level' => $level,
                 'is_ready' => true,
                 // Peringkat sudah bisa dilihat sekarang; is_final menyatakan
