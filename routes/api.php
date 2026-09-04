@@ -41,6 +41,7 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::post('/midtrans/callback', [PaymentCallbackController::class, 'handle']);
+Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
 
 Route::prefix('auth')->controller(AuthController::class)->group(function () {
     Route::post('/register', 'register')->middleware('throttle:5,1');
@@ -74,7 +75,6 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/chat/status', [AiChatController::class, 'status']);
     Route::post('/chat', [AiChatController::class, 'send'])->middleware('throttle:20,1');
     Route::get('/subtests', [SubtestController::class, 'index']);
-    Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
 
     // Reference data for the target-campus pickers. Read-only; refreshed by
     // reseeding, never through the API. /program-studi/jenjang is declared

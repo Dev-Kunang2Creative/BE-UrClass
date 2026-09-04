@@ -371,7 +371,7 @@ class BulkImportQuestionController extends Controller
 
         $spreadsheet = new Spreadsheet();
         $sheet       = $spreadsheet->getActiveSheet();
-        $sheet->setTitle($weighted ? 'Template Bobot Opsi' : 'Template Benar Salah');
+        $sheet->setTitle($weighted ? 'Template Bobot Opsi (TKP)' : 'Template Pilihan Ganda');
 
         $headers = [
             'Gambar', 'Soal', 'Opsi A', 'Opsi B', 'Opsi C', 'Opsi D', 'Opsi E',
@@ -420,15 +420,16 @@ class BulkImportQuestionController extends Controller
             ], null, 'A2');
 
             $notes = [
-                'Catatan - subtes ini dinilai per bobot opsi:',
-                '- Skor A-E wajib diisi bilangan bulat 1-5, satu angka hanya boleh dipakai sekali, dan harus ada satu opsi bernilai 5',
-                '- 5 = respons paling ideal, 1 = paling tidak sesuai. Tidak ada opsi bernilai 0',
-                '- Kolom Kunci Jawaban diabaikan: jawaban "benar" adalah opsi berbobot 5',
-                '- Semua opsi A-E wajib diisi; tidak ada soal esai pada skema ini',
-                '- Kolom Gambar: embed gambar langsung ke cell (Insert -> Pictures -> Place in Cell)',
-                '- Kolom Gambar Pembahasan: embed gambar pembahasan langsung ke cell (opsional)',
-                '- Baris pertama adalah header, data mulai dari baris 2',
-                '- Format gambar yang didukung: jpg, jpeg, png, webp',
+                'Petunjuk Pengisian - Subtes Bobot Opsi (TKP):',
+                '- Opsi A s/d E WAJIB diisi semua (5 pilihan jawaban) untuk setiap baris soal.',
+                '- Skor A s/d E wajib diisi angka 1 sampai 5, dan setiap angka hanya boleh dipakai satu kali per baris soal.',
+                '- Harus ada satu opsi bernilai 5 (respons paling ideal) dan satu opsi bernilai 1 (paling tidak sesuai). Tidak ada opsi bernilai 0.',
+                '- Kolom Kunci Jawaban diabaikan: jawaban "benar" otomatis ditentukan dari opsi berbobot 5.',
+                '- Semua opsi A-E wajib diisi; tidak ada soal esai pada skema ini.',
+                '- Kolom Gambar: embed gambar langsung ke cell (Insert -> Pictures -> Place in Cell).',
+                '- Kolom Gambar Pembahasan: embed gambar pembahasan langsung ke cell (opsional).',
+                '- Baris pertama adalah header, pengisian data dimulai dari baris 2.',
+                '- Format gambar yang didukung: jpg, jpeg, png, webp.',
             ];
         } else {
             $sheet->fromArray([
@@ -441,13 +442,14 @@ class BulkImportQuestionController extends Controller
             ], null, 'A2');
 
             $notes = [
-                'Catatan - subtes ini dinilai benar/salah:',
-                '- Kunci Jawaban hanya boleh: A, B, C, D, atau E',
-                '- Kosongkan Kunci Jawaban untuk membuat soal Essay; opsi A-E boleh kosong',
-                '- Kolom Gambar: embed gambar langsung ke cell (Insert -> Pictures -> Place in Cell)',
-                '- Kolom Gambar Pembahasan: embed gambar pembahasan langsung ke cell (opsional)',
-                '- Baris pertama adalah header, data mulai dari baris 2',
-                '- Format gambar yang didukung: jpg, jpeg, png, webp',
+                'Petunjuk Pengisian - Subtes Pilihan Ganda (A-E):',
+                '- Soal Pilihan Ganda: Opsi A s/d E WAJIB diisi lengkap (5 pilihan jawaban, tidak boleh dikosongkan).',
+                '- Kolom Kunci Jawaban wajib diisi satu huruf: A, B, C, D, atau E sesuai opsi yang benar.',
+                '- Soal Esai: kosongkan kolom Kunci Jawaban dan kosongkan kolom Opsi A-E.',
+                '- Kolom Gambar: embed gambar langsung ke cell (Insert -> Pictures -> Place in Cell).',
+                '- Kolom Gambar Pembahasan: embed gambar pembahasan langsung ke cell (opsional).',
+                '- Baris pertama adalah header, pengisian data dimulai dari baris 2.',
+                '- Format gambar yang didukung: jpg, jpeg, png, webp.',
             ];
         }
 
@@ -473,7 +475,7 @@ class BulkImportQuestionController extends Controller
         // (laporan-subtes-2026-08-30.xlsx dan seterusnya).
         $filename = sprintf(
             'template-soal-%s-%s.xlsx',
-            $weighted ? 'bobot-opsi' : 'benar-salah',
+            $weighted ? 'bobot-opsi-tkp' : 'pilihan-ganda',
             now()->format('Y-m-d'),
         );
 
