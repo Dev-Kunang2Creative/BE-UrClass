@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AiSetting;
 use App\Services\AiChatService;
 use App\Services\AuditLogger;
+use Database\Seeders\AiSettingSeeder;
 use App\Support\SafeOutboundUrl;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -45,6 +46,10 @@ class AdminAiSettingController extends Controller
             // keadaan kosong ketika admin tidak ingin menggantinya.
             'api_key' => ['nullable', 'string', 'max:500'],
             'model' => ['required', 'string', 'max:120', 'regex:/^[^\<\>\s]+$/'],
+            // Peta model -> pengali token. Kebijakan gateway, bukan sifat model,
+            // jadi diatur admin - bukan ditanam di kode.
+            'model_multipliers' => ['nullable', 'array', 'max:20'],
+            'model_multipliers.*' => ['required', 'numeric', 'min:0.01', 'max:100'],
             'system_prompt' => ['required', 'string', 'max:20000'],
             'max_tokens' => ['required', 'integer', 'min:256', 'max:32000'],
             'temperature_x100' => ['required', 'integer', 'min:0', 'max:200'],
@@ -308,6 +313,7 @@ class AdminAiSettingController extends Controller
         return [
             'provider' => $setting->provider,
             'model' => $setting->model,
+            'model_multipliers' => (object) ($setting->model_multipliers ?? []),
             'system_prompt' => $setting->system_prompt,
             'max_tokens' => $setting->max_tokens,
             'temperature_x100' => $setting->temperature_x100,
@@ -322,6 +328,12 @@ class AdminAiSettingController extends Controller
             'has_api_key' => filled($setting->api_key),
             'api_key_masked' => $setting->maskedApiKey(),
             'providers' => AiSetting::PROVIDERS,
+            // Persona bawaan dikirim supaya panel admin bisa memulihkannya.
+            // Tanpa ini, persona yang sudah disunting tidak punya jalan kembali
+            // selain mengetik ulang enam ribu karakter dari ingatan - dan
+            // pengerasan terhadap injeksi yang dikirim lewat pembaruan tidak
+            // akan pernah terpakai di lingkungan yang personanya sudah tersimpan.
+            'default_system_prompt' => AiSettingSeeder::personaKakakTingkat(),
             'updated_at' => $setting->updated_at,
         ];
     }

@@ -21,38 +21,64 @@ use Illuminate\Support\Facades\DB;
  */
 class AdminAiUsageController extends Controller
 {
-    /** Jendela waktu yang ditawarkan, beserta lebar ember grafiknya. */
+    /**
+     * Jendela waktu yang ditawarkan, beserta lebar ember bawaannya.
+     *
+     * `hourly` menyatakan apakah jendela itu boleh dilihat per jam. Dibatasi
+     * sampai tujuh hari (168 titik) karena di atas itu payload-nya membengkak
+     * tanpa menambah apa pun yang bisa dibaca - 30 hari per jam berarti 720
+     * titik, dan grafik sepanjang itu lebih cepat dijawab dengan mengganti
+     * jendelanya daripada digulir.
+     */
     private const WINDOWS = [
-        'today' => ['label' => 'Hari ini', 'bucket' => 'hour'],
-        '24h' => ['label' => '24 jam', 'bucket' => 'hour'],
-        '7d' => ['label' => '7 hari', 'bucket' => 'day'],
-        '30d' => ['label' => '30 hari', 'bucket' => 'day'],
-        '60d' => ['label' => '60 hari', 'bucket' => 'day'],
+        'today' => ['label' => 'Hari ini', 'bucket' => 'hour', 'hourly' => true],
+        '24h' => ['label' => '24 jam', 'bucket' => 'hour', 'hourly' => true],
+        '7d' => ['label' => '7 hari', 'bucket' => 'day', 'hourly' => true],
+        '30d' => ['label' => '30 hari', 'bucket' => 'day', 'hourly' => false],
+        '60d' => ['label' => '60 hari', 'bucket' => 'day', 'hourly' => false],
     ];
 
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate([
             'window' => ['nullable', 'string', 'in:'.implode(',', array_keys(self::WINDOWS))],
+            'bucket' => ['nullable', 'string', 'in:hour,day'],
         ]);
 
         $window = $validated['window'] ?? '24h';
-        $bucket = self::WINDOWS[$window]['bucket'];
+        $meta = self::WINDOWS[$window];
+        $diminta = $validated['bucket'] ?? null;
+
+        // Permintaan per jam hanya dilayani untuk jendela yang mengizinkannya.
+        // Diam-diam turun ke harian, bukan menolak: antarmuka bisa masih
+        // mengirim pilihan lama saat jendelanya berganti, dan menolaknya berarti
+        // grafik kosong tanpa sebab yang terlihat.
+        $bucket = match (true) {
+            $diminta === 'hour' && $meta['hourly'] => 'hour',
+            $diminta === 'day' => 'day',
+            default => $meta['bucket'],
+        };
+
         $since = $this->since($window);
 
         return response()->json([
             'data' => [
                 'window' => $window,
                 'windows' => collect(self::WINDOWS)
-                    ->map(fn ($meta, $key) => ['key' => $key, 'label' => $meta['label']])
+                    ->map(fn ($item, $key) => [
+                        'key' => $key,
+                        'label' => $item['label'],
+                        'hourly' => $item['hourly'],
+                    ])
                     ->values(),
                 'since' => $since->toIso8601String(),
                 'bucket' => $bucket,
                 'totals' => $this->totals($since),
-                'series' => $this->series($since, $bucket),
-                'by_model' => $this->byModel($since),
+                'series' => $series = $this->series($since, $bucket),
+                // Puncaknya dihitung di sini supaya angka yang dipakai grafik dan
+                // angka yang ditulis sebagai "puncak" tidak mungkin berbeda.
+                'peak' => $this->peak($series),
                 'top_users' => $this->topUsers($since),
-                'recent' => $this->recent(),
             ],
         ]);
     }
@@ -80,7 +106,7 @@ class AdminAiUsageController extends Controller
             ->selectRaw('COALESCE(SUM(input_tokens), 0) as input_tokens')
             ->selectRaw('COALESCE(SUM(output_tokens), 0) as output_tokens')
             ->selectRaw('COALESCE(SUM(cached_tokens), 0) as cached_tokens')
-            ->selectRaw('COALESCE(SUM(cost_usd), 0) as cost_usd')
+            ->selectRaw('COALESCE(SUM(cost_idr), 0) as cost_idr')
             ->selectRaw('COALESCE(AVG(NULLIF(duration_ms, 0)), 0) as avg_duration_ms')
             ->first();
 
@@ -92,7 +118,7 @@ class AdminAiUsageController extends Controller
             'input_tokens' => (int) $row->input_tokens,
             'output_tokens' => (int) $row->output_tokens,
             'cached_tokens' => (int) $row->cached_tokens,
-            'cost_usd' => round((float) $row->cost_usd, 4),
+            'cost_idr' => round((float) $row->cost_idr, 2),
             'avg_duration_ms' => (int) round((float) $row->avg_duration_ms),
         ];
     }
@@ -131,7 +157,7 @@ class AdminAiUsageController extends Controller
             ->selectRaw('COUNT(*) as requests')
             ->selectRaw('COALESCE(SUM(input_tokens), 0) as input_tokens')
             ->selectRaw('COALESCE(SUM(output_tokens), 0) as output_tokens')
-            ->selectRaw('COALESCE(SUM(cost_usd), 0) as cost_usd')
+            ->selectRaw('COALESCE(SUM(cost_idr), 0) as cost_idr')
             ->groupBy('bucket')
             ->orderBy('bucket')
             ->get()
@@ -154,7 +180,7 @@ class AdminAiUsageController extends Controller
                 'input_tokens' => (int) ($row->input_tokens ?? 0),
                 'output_tokens' => (int) ($row->output_tokens ?? 0),
                 'total_tokens' => (int) ($row->input_tokens ?? 0) + (int) ($row->output_tokens ?? 0),
-                'cost_usd' => round((float) ($row->cost_usd ?? 0), 6),
+                'cost_idr' => round((float) ($row->cost_idr ?? 0), 2),
             ];
 
             $bucket === 'hour' ? $cursor->addHour() : $cursor->addDay();
@@ -163,27 +189,23 @@ class AdminAiUsageController extends Controller
         return $out;
     }
 
-    /** @return array<int, array<string, mixed>> */
-    private function byModel(Carbon $since): array
+    /**
+     * Ember dengan token terbanyak, atau null kalau tidak ada pemakaian.
+     *
+     * @param  array<int, array<string, mixed>>  $series
+     * @return array<string, mixed>|null
+     */
+    private function peak(array $series): ?array
     {
-        return AiUsageLog::query()
-            ->where('created_at', '>=', $since)
-            ->whereNotNull('model')
-            ->selectRaw('model')
-            ->selectRaw('COUNT(*) as requests')
-            ->selectRaw('COALESCE(SUM(input_tokens + output_tokens), 0) as total_tokens')
-            ->selectRaw('COALESCE(SUM(cost_usd), 0) as cost_usd')
-            ->groupBy('model')
-            ->orderByDesc('requests')
-            ->limit(8)
-            ->get()
-            ->map(fn ($row) => [
-                'model' => $row->model,
-                'requests' => (int) $row->requests,
-                'total_tokens' => (int) $row->total_tokens,
-                'cost_usd' => round((float) $row->cost_usd, 4),
-            ])
-            ->all();
+        $puncak = null;
+
+        foreach ($series as $titik) {
+            if ($titik['total_tokens'] > 0 && ($puncak === null || $titik['total_tokens'] > $puncak['total_tokens'])) {
+                $puncak = $titik;
+            }
+        }
+
+        return $puncak;
     }
 
     /** @return array<int, array<string, mixed>> */
@@ -197,7 +219,7 @@ class AdminAiUsageController extends Controller
             ->selectRaw('users.email as email')
             ->selectRaw('COUNT(*) as requests')
             ->selectRaw('COALESCE(SUM(ai_usage_logs.input_tokens + ai_usage_logs.output_tokens), 0) as total_tokens')
-            ->selectRaw('COALESCE(SUM(ai_usage_logs.cost_usd), 0) as cost_usd')
+            ->selectRaw('COALESCE(SUM(ai_usage_logs.cost_idr), 0) as cost_idr')
             ->groupBy('users.name', 'users.email')
             ->orderByDesc('requests')
             ->limit(10)
@@ -207,37 +229,9 @@ class AdminAiUsageController extends Controller
                 'email' => $row->email,
                 'requests' => (int) $row->requests,
                 'total_tokens' => (int) $row->total_tokens,
-                'cost_usd' => round((float) $row->cost_usd, 4),
+                'cost_idr' => round((float) $row->cost_idr, 2),
             ])
             ->all();
     }
 
-    /**
-     * Permintaan terakhir. Tidak dibatasi jendela waktu - kalau asisten baru
-     * saja rusak, yang dicari admin adalah permintaan terakhir apa pun jendela
-     * yang sedang dipilih.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    private function recent(): array
-    {
-        return AiUsageLog::query()
-            ->with('user:id,name,email')
-            ->latest('created_at')
-            ->limit(20)
-            ->get()
-            ->map(fn ($log) => [
-                'id' => $log->id,
-                'created_at' => $log->created_at,
-                'user_name' => $log->user?->name ?? 'Pengguna dihapus',
-                'model' => $log->model,
-                'input_tokens' => $log->input_tokens,
-                'output_tokens' => $log->output_tokens,
-                'cost_usd' => round($log->cost_usd, 6),
-                'status' => $log->status,
-                'reason' => $log->reason,
-                'duration_ms' => $log->duration_ms,
-            ])
-            ->all();
-    }
 }

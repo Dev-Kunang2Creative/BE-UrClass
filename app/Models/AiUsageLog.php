@@ -26,17 +26,25 @@ class AiUsageLog extends Model
         'input_tokens',
         'output_tokens',
         'cached_tokens',
-        'cost_usd',
+        'token_multiplier',
+        'cost_idr',
         'status',
         'reason',
         'duration_ms',
+        // Boleh diisi eksplisit. Tabel ini hanya bertambah dan tidak pernah
+        // diubah, jadi waktunya kadang perlu ditetapkan dari luar - untuk
+        // backfill, dan untuk test yang menyusun sebaran waktu. Tanpa ini
+        // Eloquent mengabaikannya tanpa memberi tahu, dan seluruh baris
+        // menumpuk di satu waktu.
+        'created_at',
     ];
 
     protected $casts = [
         'input_tokens' => 'integer',
         'output_tokens' => 'integer',
         'cached_tokens' => 'integer',
-        'cost_usd' => 'float',
+        'token_multiplier' => 'float',
+        'cost_idr' => 'float',
         'duration_ms' => 'integer',
     ];
 
@@ -46,7 +54,10 @@ class AiUsageLog extends Model
     }
 
     /**
-     * Biaya satu permintaan menurut harga yang berlaku saat itu.
+     * Biaya satu permintaan dalam Rupiah, menurut harga yang berlaku saat itu.
+     *
+     * Harga disimpan sebagai Rupiah per satu juta token, jadi tidak ada kurs
+     * yang ikut dihitung di sini - dan tidak ada kurs yang bisa basi.
      *
      * Token cache dihitung dengan harganya sendiri dan dikurangkan dari input,
      * karena provider melaporkan cached_tokens sebagai bagian dari input -
@@ -64,7 +75,9 @@ class AiUsageLog extends Model
             ($uncachedInput / 1_000_000) * (float) $setting->price_input_per_mtok
             + ($cachedTokens / 1_000_000) * (float) $setting->price_cached_per_mtok
             + ($outputTokens / 1_000_000) * (float) $setting->price_output_per_mtok,
-            6,
+            // Dua desimal: Rupiah tidak punya pecahan yang lebih kecil dari sen,
+            // dan biaya satu permintaan pun sudah dalam satuan rupiah utuh.
+            2,
         );
     }
 }

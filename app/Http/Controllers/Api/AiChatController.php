@@ -6,6 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Models\AiSetting;
 use App\Models\AiUsageLog;
 use App\Services\AiChatService;
+use App\Support\ActiveExam;
+use App\Support\AiLivePresence;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -28,10 +30,20 @@ class AiChatController extends Controller
     {
         $setting = AiSetting::current();
         $aktif = $setting->isUsable();
+        $ujian = ActiveExam::for($request->user()->id);
 
         return response()->json([
             'data' => [
                 'is_available' => $aktif,
+                // Dipisah dari is_available, bukan digabung: keduanya sebab yang
+                // berbeda dan butuh penjelasan yang berbeda. "Belum tersedia"
+                // untuk peserta yang sedang ujian adalah pesan yang salah - ia
+                // akan tersedia lagi begitu ujiannya selesai.
+                'is_blocked_by_exam' => $ujian !== null,
+                'exam' => $ujian === null ? null : [
+                    'title' => $ujian['title'],
+                    'ends_at' => $ujian['ends_at'],
+                ],
                 'daily_limit' => $setting->daily_message_limit,
                 'used_today' => $aktif ? $this->usedToday($request->user()->id) : 0,
                 'max_message_length' => AiChatService::MAX_MESSAGE_LENGTH,
@@ -64,6 +76,23 @@ class AiChatController extends Controller
         }
 
         $user = $request->user();
+
+        // Ditegakkan di server, bukan hanya dengan menyembunyikan tombolnya.
+        // Tombol yang tidak dirender tetap bisa dilewati - endpoint-nya diketahui
+        // dari tab jaringan, dan satu permintaan curl sudah cukup. Batas yang
+        // hanya ada di antarmuka bukan batas.
+        $ujian = ActiveExam::for($user->id);
+
+        if ($ujian !== null) {
+            $this->log($setting, $user->id, 'blocked', 'exam');
+
+            return response()->json([
+                'message' => 'Asisten dimatikan selama tryout berlangsung. Selesaikan "'
+                    .$ujian['title'].'" dulu, nanti kita bahas soalnya sama-sama.',
+                'data' => ['exam' => ['title' => $ujian['title'], 'ends_at' => $ujian['ends_at']]],
+            ], 403);
+        }
+
         $terpakai = $this->usedToday($user->id);
 
         // Setiap panggilan berbiaya uang. Tanpa batas per akun, satu pengguna -
@@ -79,6 +108,13 @@ class AiChatController extends Controller
         }
 
         $mulai = microtime(true);
+
+        // Ditandai sebelum permintaan dikirim, dibersihkan di finally.
+        // Permintaan yang masih berjalan tidak muncul di ai_usage_logs - barisnya
+        // baru ditulis setelah jawaban tiba - jadi tanpa ini halaman pemantauan
+        // langsung tidak bisa membedakan peserta yang sedang menunggu dari yang
+        // sedang menganggur.
+        AiLivePresence::mulai($user->id);
 
         try {
             $hasil = $chat->send($setting, $validated['message'], $validated['history'] ?? []);
@@ -96,9 +132,14 @@ class AiChatController extends Controller
             $this->log($setting, $user->id, 'failed', 'exception', [], $mulai);
 
             return response()->json(['message' => 'Asisten AI gagal menjawab. Coba lagi sebentar.'], 502);
+        } finally {
+            // finally, bukan setelah blok try: jalur galat juga harus
+            // membersihkannya, kalau tidak peserta yang permintaannya gagal
+            // tampak menunggu sampai entrinya kedaluwarsa sendiri.
+            AiLivePresence::selesai($user->id);
         }
 
-        $this->log($setting, $user->id, 'ok', null, $hasil['usage'], $mulai, $hasil['model']);
+        $this->log($setting, $user->id, 'ok', null, $hasil['usage'], $mulai, $hasil['model'], (float) ($hasil['multiplier'] ?? 1));
 
         $terpakai = $this->increment($user->id);
 
@@ -113,6 +154,9 @@ class AiChatController extends Controller
                     'input_tokens' => (int) ($hasil['usage']['input_tokens'] ?? 0),
                     'output_tokens' => (int) ($hasil['usage']['output_tokens'] ?? 0),
                     'cached_tokens' => (int) ($hasil['usage']['cached_tokens'] ?? 0),
+                    // Dikirim supaya antarmuka bisa menjelaskan kenapa angkanya
+                    // berbeda dari yang biasa dilihat di dasbor provider.
+                    'multiplier' => (float) ($hasil['multiplier'] ?? 1),
                 ],
             ],
         ]);
@@ -139,6 +183,7 @@ class AiChatController extends Controller
         array $usage = [],
         ?float $mulai = null,
         ?string $model = null,
+        float $multiplier = 1.0,
     ): void {
         try {
             $input = (int) ($usage['input_tokens'] ?? 0);
@@ -152,7 +197,12 @@ class AiChatController extends Controller
                 'input_tokens' => $input,
                 'output_tokens' => $output,
                 'cached_tokens' => $cached,
-                'cost_usd' => AiUsageLog::estimateCost($setting, $input, $output, $cached),
+                // Pengali disimpan bersama hasilnya: satu baris bertuliskan
+                // 4.000 token bisa berarti 2.000 mentah dengan pengali dua, dan
+                // tanpa kolom ini tidak ada cara mengetahuinya setelah
+                // pengalinya diubah.
+                'token_multiplier' => $multiplier,
+                'cost_idr' => AiUsageLog::estimateCost($setting, $input, $output, $cached),
                 'status' => $status,
                 'reason' => $reason,
                 'duration_ms' => $mulai ? (int) round((microtime(true) - $mulai) * 1000) : 0,
