@@ -4,9 +4,13 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Tryout;
+use App\Models\TryoutSession;
+use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use App\Models\UserTryoutAccess;
 use App\Services\AuditLogger;
 use App\Services\DummyParticipantService;
+use App\Services\ScoringService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -149,6 +153,26 @@ class AdminDummyParticipantController extends Controller
             'real_participants' => $real,
             'dummy_participants' => $dummy,
         ]);
+    }
+
+    public function destroySingle(Request $request, Tryout $tryout, User $user): JsonResponse
+    {
+        abort_unless($user->is_dummy, 422, 'Hanya peserta dummy yang dapat dihapus dari leaderboard');
+        abort_unless(TryoutSession::where('tryout_id', $tryout->id)->where('user_id', $user->id)->exists(), 404);
+        ScoringService::forgetIrtWeights($tryout);
+
+        DB::transaction(function () use ($user, $request, $tryout) {
+            $user->tokens()->delete();
+            // Foreign keys menghapus sesi, jawaban, dan akses milik akun dummy ini.
+            $user->delete();
+            AuditLogger::log('TryoutDummyParticipant', 'delete_single',
+                "Admin menghapus peserta dummy {$user->name} ({$user->id}) dari {$tryout->title}.",
+                $request->user(), $tryout);
+        });
+        // Jumlah peserta setelah hapus bisa pernah terpakai oleh cache lama.
+        ScoringService::forgetIrtWeights($tryout);
+
+        return response()->json(['message' => 'Peserta dummy berhasil dihapus.']);
     }
 
     private function validatedImportRows(Collection $rows, Collection $headers, array $requiredHeaders): Collection

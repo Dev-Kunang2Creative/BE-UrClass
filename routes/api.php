@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\AccessCodeController;
+use App\Http\Controllers\Api\ExamSettingController;
+use App\Http\Controllers\Api\ExamFeedbackController;
 use App\Http\Controllers\Api\AdminAiSettingController;
 use App\Http\Controllers\Api\AdminAiLiveController;
 use App\Http\Controllers\Api\AdminAiQuotaController;
@@ -63,6 +65,8 @@ Route::prefix('auth')->controller(AuthController::class)->group(function () {
 |--------------------------------------------------------------------------
 */
 Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/settings/exam-passing-grades', [ExamSettingController::class, 'show']);
+    Route::post('/tryouts/{tryout}/feedback', [ExamFeedbackController::class, 'store'])->middleware('throttle:10,1');
     Route::put('/profile/update', [ProfileController::class, 'update'])->middleware('throttle:15,1');
     Route::put('/profile/kategori', [ProfileController::class, 'updateKategori'])->middleware('throttle:15,1');
     Route::post('/access-codes/redeem', [AccessCodeController::class, 'redeem']);
@@ -112,6 +116,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/tryouts/{tryout}', 'show');
 
         Route::prefix('tryouts/{tryout}')->group(function () {
+            Route::get('/exam', 'showUnifiedExam');
             Route::post('/enroll', 'enroll');
             Route::post('/start', 'start');
             Route::post('/finish', 'finish');
@@ -147,6 +152,9 @@ Route::middleware(['auth:sanctum', 'admin'])
     ->group(function () {
 
         Route::get('/stats', [AdminStatsController::class, 'index']);
+        Route::get('/settings/exam-passing-grades', [ExamSettingController::class, 'show']);
+        Route::put('/settings/exam-passing-grades', [ExamSettingController::class, 'update']);
+        Route::get('/tryouts/feedbacks', [ExamFeedbackController::class, 'index']);
         Route::get('/sales-report', [AdminSalesReportController::class, 'index']);
         Route::get('/fee-to-report', [AdminSalesReportController::class, 'feeTryout']);
         Route::get('/tryout-proof-images', [AdminTryoutProofController::class, 'index']);
@@ -220,6 +228,7 @@ Route::middleware(['auth:sanctum', 'admin'])
 
         // --- TRYOUT & PENGATURAN TRYOUT ---
         Route::get('/tryouts/dummy-excel-template', [AdminDummyParticipantController::class, 'template']);
+        Route::delete('/tryouts/{tryout}/leaderboard/dummy/{user}', [AdminDummyParticipantController::class, 'destroySingle']);
         Route::post('/tryouts/{tryout}/inject-dummy-random', [AdminDummyParticipantController::class, 'injectRandom']);
         Route::post('/tryouts/{tryout}/inject-dummy-excel', [AdminDummyParticipantController::class, 'injectExcel']);
         Route::delete('/tryouts/{tryout}/clear-dummy', [AdminDummyParticipantController::class, 'clear']);

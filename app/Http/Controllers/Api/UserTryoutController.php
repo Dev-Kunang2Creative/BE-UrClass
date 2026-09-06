@@ -517,6 +517,10 @@ class UserTryoutController extends Controller
             $session->refresh();
         }
 
+        if ($tryout->kategori === 'cpns') {
+            $session->batasWaktuCpns($tryout);
+        }
+
         return response()->json([
             'message' => $session->attempt_number > 1 && ! $tryout->is_free
                 ? 'Tryout dimulai. 1 Tiket telah digunakan.'
@@ -563,9 +567,9 @@ class UserTryoutController extends Controller
             ]
         );
 
-        $endTime = $subtestSession->started_at
-            ? $subtestSession->started_at->copy()->addMinutes($tryoutSubtest->duration_minutes)
-            : null;
+        $endTime = $tryout->kategori === 'cpns'
+            ? $session->batasWaktuCpns($tryout)
+            : $subtestSession->started_at?->copy()->addMinutes($tryoutSubtest->duration_minutes);
 
         $remainingSeconds = $endTime
             ? max((int) ceil(now()->diffInSeconds($endTime, false)), 0)
@@ -618,9 +622,9 @@ class UserTryoutController extends Controller
             return response()->json(['message' => 'Subtest belum dimulai'], 422);
         }
 
-        $endTime = $subtestSession->started_at
-            ? $subtestSession->started_at->copy()->addMinutes($tryoutSubtest->duration_minutes)
-            : null;
+        $endTime = $tryout->kategori === 'cpns'
+            ? $session->batasWaktuCpns($tryout)
+            : $subtestSession->started_at?->copy()->addMinutes($tryoutSubtest->duration_minutes);
 
         $remainingSeconds = $endTime
             ? max((int) ceil(now()->diffInSeconds($endTime, false)), 0)
@@ -711,6 +715,49 @@ class UserTryoutController extends Controller
         ]);
     }
 
+    public function showUnifiedExam(Request $request, Tryout $tryout): JsonResponse
+    {
+        abort_unless($tryout->kategori === 'cpns', 422, 'Ujian terpadu hanya tersedia untuk CPNS.');
+        $session = TryoutSession::where('user_id', $request->user()->id)
+            ->where('tryout_id', $tryout->id)->where('status', 'in_progress')->latest('created_at')->first();
+        abort_unless($session, 422, 'Tryout belum dimulai.');
+        $batas = $session->batasWaktuCpns($tryout);
+        $sisa = max(0, (int) ceil(now()->diffInSeconds($batas, false)));
+        $timer = ['started_at' => $session->started_at, 'end_time' => $batas,
+            'remaining_seconds' => $sisa, 'status' => $sisa > 0 ? 'in_progress' : 'expired'];
+        if ($sisa === 0) {
+            return response()->json(['message' => 'Waktu tryout sudah habis.', 'data' => ['timer' => $timer]], 422);
+        }
+
+        $bagian = $tryout->tryoutSubtests()->with('subtest')->where('is_active', true)->get()
+            ->sortBy(fn ($ts) => [array_search(strtoupper($ts->subtest->category), ['TWK', 'TIU', 'TKP']) === false
+                ? 3 : array_search(strtoupper($ts->subtest->category), ['TWK', 'TIU', 'TKP']), $ts->order_no]);
+        $pertanyaan = Question::with('options')->whereIn('subtest_id', $bagian->pluck('subtest_id'))
+            ->where('is_active', true)->get()->groupBy('subtest_id');
+        $jawaban = UserAnswer::where('tryout_session_id', $session->id)->pluck('answer', 'question_id');
+        $questions = [];
+        foreach ($bagian as $ts) {
+            $daftar = ($pertanyaan[$ts->subtest_id] ?? collect())->sortBy(fn ($q) => md5($session->id.$q->id));
+            foreach ($daftar as $q) {
+                $opsi = $q->question_type === 'multiple_choice' && $tryout->randomize_options
+                    ? $q->options->sortBy(fn ($o) => md5($session->id.$q->id.$o->id))->values()
+                    : $q->options->values();
+                $questions[] = [
+                    'id' => $q->id, 'tryout_subtest_id' => $ts->id, 'category' => strtoupper($ts->subtest->category),
+                    'question_type' => $q->question_type, 'question_text' => $q->question_text,
+                    'question_image' => $q->question_image, 'question_image_url' => $q->question_image_url,
+                    'order_no' => count($questions) + 1, 'my_answer' => $jawaban[$q->id] ?? null,
+                    'options' => $opsi->map(fn ($o) => ['id' => $o->id, 'option_key' => $o->option_key, 'option_text' => $o->option_text]),
+                ];
+            }
+        }
+
+        return response()->json(['data' => [
+            'tryout' => ['id' => $tryout->id, 'title' => $tryout->title],
+            'exam_type' => 'cpns', 'timer' => $timer, 'questions' => $questions,
+        ]]);
+    }
+
     public function submitAnswer(Request $request, Tryout $tryout, TryoutSubtest $tryoutSubtest, Question $question): JsonResponse
     {
         $user = $request->user();
@@ -740,6 +787,11 @@ class UserTryoutController extends Controller
 
         if (! $session) {
             return response()->json(['message' => 'Sesi tidak valid'], 422);
+        }
+
+        if ($tryout->kategori === 'cpns') {
+            abort_unless($tryoutSubtest->is_active && $question->is_active, 404, 'Soal tidak aktif.');
+            abort_if($session->batasWaktuCpns($tryout)->lessThanOrEqualTo(now()), 422, 'Waktu tryout sudah habis.');
         }
 
         $answer = $validated['answer'] ?? null;
@@ -795,6 +847,11 @@ class UserTryoutController extends Controller
     public function finishSubtest(Request $request, Tryout $tryout, TryoutSubtest $tryoutSubtest): JsonResponse
     {
         $user = $request->user();
+
+        abort_unless($tryoutSubtest->tryout_id === $tryout->id, 404);
+        if ($tryout->kategori === 'cpns') {
+            return response()->json(['message' => 'Seluruh subtes CPNS tetap terbuka sampai tryout selesai.']);
+        }
 
         $session = TryoutSession::where('user_id', $user->id)
             ->where('tryout_id', $tryout->id)
@@ -1059,6 +1116,12 @@ class UserTryoutController extends Controller
             });
         }
 
+        $filterTarget = $request->validate(['target_instance' => ['nullable', 'string', 'max:255']]);
+        if ($tryout->kategori === 'cpns' && ! empty($filterTarget['target_instance'])) {
+            $sessionQuery->whereHas('user', fn ($q) => $q->where('cpns_target_type', 'kedinasan')
+                ->where('target_university_1', $filterTarget['target_instance']));
+        }
+
         $sessions = $sessionQuery->get();
 
         $includeProofImages = $request->user()?->role === 'admin';
@@ -1149,6 +1212,7 @@ class UserTryoutController extends Controller
                 ];
 
                 if ($includeProofImages) {
+                    $row['is_dummy'] = (bool) $session->user?->is_dummy;
                     $access = $proofsByUser->get($session->user_id);
                     $proofImages = collect($access?->proof_images ?: ($access?->proof_image ? [$access->proof_image] : []))
                         ->filter()

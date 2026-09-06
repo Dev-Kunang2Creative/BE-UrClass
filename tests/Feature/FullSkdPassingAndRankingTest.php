@@ -18,6 +18,34 @@ class FullSkdPassingAndRankingTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_leaderboard_kedinasan_memfilter_target_sekolah_tanpa_jurusan(): void
+    {
+        [$tryout] = $this->createSkdTryout();
+        $ipdn = User::factory()->create(['kategori' => 'cpns', 'cpns_target_type' => 'kedinasan', 'target_university_1' => 'IPDN']);
+        $stis = User::factory()->create(['kategori' => 'cpns', 'cpns_target_type' => 'kedinasan', 'target_university_1' => 'STIS']);
+        $this->createFinishedSession($ipdn, $tryout, 1);
+        $this->createFinishedSession($stis, $tryout, 1);
+        $this->actingAs($ipdn)->getJson("/api/tryouts/{$tryout->id}/leaderboard?target_instance=IPDN")
+            ->assertOk()->assertJsonPath('data.total_participants', 1)
+            ->assertJsonPath('data.leaderboard.0.user_id', $ipdn->id);
+    }
+
+    public function test_ambang_global_mengubah_hasil_sesi_lama_di_seluruh_tryout(): void
+    {
+        [$tryout, $questions] = $this->createSkdTryout();
+        $peserta = User::factory()->create(['kategori' => 'cpns', 'cpns_target_type' => 'kedinasan']);
+        $session = $this->createFinishedSession($peserta, $tryout, 1);
+        $this->seedScores($session, $questions, ['twk' => 65, 'tiu' => 80, 'tkp' => 166]);
+        $this->assertTrue(ScoringService::calculateSkdPassingStatus($session)['is_passed_skd']);
+        $this->actingAs(User::factory()->create(['role' => 'admin']))
+            ->putJson('/api/admin/settings/exam-passing-grades', [
+                'skd_passing_grade_twk' => 70, 'skd_passing_grade_tiu' => 85, 'skd_passing_grade_tkp' => 170,
+            ])->assertOk();
+        $this->assertFalse(ScoringService::calculateSkdPassingStatus($session)['is_passed_skd']);
+        $this->actingAs($peserta)->getJson("/api/tryouts/{$tryout->id}/result")
+            ->assertOk()->assertJsonPath('data.skd_passing_grades.twk', 70);
+    }
+
     public function test_full_skd_requires_cpns_and_the_complete_active_question_composition(): void
     {
         [$fullSkd] = $this->createSkdTryout();

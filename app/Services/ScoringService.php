@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Question;
+use App\Models\ExamSetting;
 use App\Models\QuestionOption;
 use App\Models\Subtest;
 use App\Models\Tryout;
@@ -36,12 +37,6 @@ class ScoringService
      * dipakai Passing Grade KepmenPAN-RB (TWK 65, TIU 80, TKP 166).
      */
     public const CPNS_SCORE_CORRECT = 5;
-
-    public const SKD_PASSING_GRADES = [
-        'twk' => 65,
-        'tiu' => 80,
-        'tkp' => 166,
-    ];
 
     public const FULL_SKD_QUESTION_COUNTS = [
         'twk' => 30,
@@ -364,8 +359,10 @@ class ScoringService
                 ($scoresBySession[$sid][$category] ?? 0.0) + (float) $row->raw_score;
         }
 
+        $passingGrades = ExamSetting::getSkdPassingGrades();
+
         return collect($scoresBySession)
-            ->map(fn (array $scores) => self::buildSkdPassingStatus($scores))
+            ->map(fn (array $scores) => self::buildSkdPassingStatus($scores, $passingGrades))
             ->all();
     }
 
@@ -422,12 +419,13 @@ class ScoringService
         return $idsByCategory;
     }
 
-    private static function buildSkdPassingStatus(array $scores): array
+    private static function buildSkdPassingStatus(array $scores, ?array $passingGrades = null): array
     {
+        $passingGrades ??= ExamSetting::getSkdPassingGrades();
         $normalized = [];
         $subtests = [];
 
-        foreach (self::SKD_PASSING_GRADES as $category => $passingGrade) {
+        foreach ($passingGrades as $category => $passingGrade) {
             $score = round((float) ($scores[$category] ?? 0), 2);
             $isPassed = $score >= $passingGrade;
             $normalized[$category] = $score;
@@ -441,7 +439,7 @@ class ScoringService
         return [
             'is_passed_skd' => collect($subtests)->every(fn (array $subtest) => $subtest['is_passed']),
             'scores' => $normalized,
-            'passing_grades' => self::SKD_PASSING_GRADES,
+            'passing_grades' => $passingGrades,
             'subtests' => $subtests,
         ];
     }
