@@ -19,10 +19,15 @@ class PerguruanTinggiController extends Controller
         $validated = $request->validate([
             'search' => ['nullable', 'string', 'max:120'],
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
+            // Sekolah kedinasan berada di tabel yang sama, dibedakan kolom ini.
+            // Tanpa filter, keduanya ikut terbawa - dan peserta UTBK tidak
+            // seharusnya menemukan IPDN di daftar target kampusnya.
+            'jenis' => ['nullable', 'string', 'in:ptn,kedinasan'],
         ]);
 
         $query = PerguruanTinggi::query()
-            ->select(['id', 'kode_ptn', 'nama'])
+            ->select(['id', 'kode_ptn', 'nama', 'jenis'])
+            ->jenis($validated['jenis'] ?? null)
             ->withCount('programStudi')
             ->orderBy('nama');
 

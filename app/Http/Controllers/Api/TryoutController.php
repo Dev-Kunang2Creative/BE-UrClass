@@ -39,7 +39,9 @@ class TryoutController extends Controller
             'image' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'start_date' => ['nullable', 'date'],
             'end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
-            'category' => ['nullable', 'string', Rule::in(['UTBK', 'UM', 'SNBP', 'SKD', 'SKB', 'Kedinasan'])],
+            // Hanya dua kategori: UTBK dan CPNS. Sub-kategori lama (UM, SNBP,
+            // SKD, SKB, Kedinasan) tidak dipakai UrClass.
+            'category' => ['nullable', 'string', Rule::in(['UTBK', 'CPNS'])],
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
             'is_free' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
@@ -56,8 +58,11 @@ class TryoutController extends Controller
         }
 
         $validated['created_by'] = $request->user()->id;
+        // Kategori diturunkan dari jalurnya, bukan dipilih terpisah: keduanya
+        // menyatakan hal yang sama, dan kalau bisa diisi sendiri-sendiri akan
+        // ada tryout berjalur CPNS tapi berkategori UTBK.
         $kategori = $validated['kategori'] ?? 'utbk';
-        $validated['category'] = $validated['category'] ?? ($kategori === 'cpns' ? 'SKD' : 'UTBK');
+        $validated['category'] = strtoupper($kategori);
         $validated['is_free'] = $validated['is_free'] ?? false;
         $validated['use_irt'] = $validated['use_irt'] ?? true;
         $validated['randomize_options'] = $validated['randomize_options'] ?? false;
@@ -86,8 +91,14 @@ class TryoutController extends Controller
     {
         $search = $request->query('search');
         $statusFilter = $request->query('status');
+        $participantType = $request->query('participant_type', 'all');
 
         $query = $tryout->userAccesses()->with('user')
+            ->when(in_array($participantType, ['real', 'dummy'], true), function ($query) use ($participantType) {
+                $query->whereHas('user', fn ($userQuery) => $participantType === 'dummy'
+                    ? $userQuery->dummy()
+                    : $userQuery->real());
+            })
             ->when($search, function ($q, $search) {
                 $q->whereHas('user', function ($uq) use ($search) {
                     $uq->where('name', 'like', "%{$search}%")
@@ -158,7 +169,9 @@ class TryoutController extends Controller
             'image' => ['nullable', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
             'start_date' => ['nullable', 'date'],
             'end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
-            'category' => ['nullable', 'string', Rule::in(['UTBK', 'UM', 'SNBP', 'SKD', 'SKB', 'Kedinasan'])],
+            // Hanya dua kategori: UTBK dan CPNS. Sub-kategori lama (UM, SNBP,
+            // SKD, SKB, Kedinasan) tidak dipakai UrClass.
+            'category' => ['nullable', 'string', Rule::in(['UTBK', 'CPNS'])],
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
             'is_free' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
@@ -182,7 +195,7 @@ class TryoutController extends Controller
         $validated['randomize_options'] = $validated['randomize_options'] ?? $tryout->randomize_options;
         $validated['is_published'] = $validated['is_published'] ?? $tryout->is_published;
         $kategori = $validated['kategori'] ?? $tryout->kategori ?? 'utbk';
-        $validated['category'] = $validated['category'] ?? $tryout->category ?? ($kategori === 'cpns' ? 'SKD' : 'UTBK');
+        $validated['category'] = strtoupper($kategori);
 
         $tryout->update($validated);
         AuditLogger::log('Tryout', 'update', "Tryout diupdate: \"{$tryout->title}\"", $request->user(), $tryout);
@@ -306,28 +319,32 @@ class TryoutController extends Controller
             ];
         });
 
-        $origin = request()->header('Origin') ?: '*';
-        header('Access-Control-Allow-Origin: ' . $origin);
-        header('Access-Control-Allow-Methods: GET, OPTIONS');
-        header('Access-Control-Allow-Headers: Authorization, Content-Type, Accept');
-        header('Access-Control-Allow-Credentials: true');
-        header('Access-Control-Expose-Headers: Content-Disposition');
+        if (!headers_sent()) {
+            $origin = request()->header('Origin') ?: '*';
+            header('Access-Control-Allow-Origin: ' . $origin);
+            header('Access-Control-Allow-Methods: GET, OPTIONS');
+            header('Access-Control-Allow-Headers: Authorization, Content-Type, Accept');
+            header('Access-Control-Allow-Credentials: true');
+            header('Access-Control-Expose-Headers: Content-Disposition');
+        }
+
+        $logoPath = public_path('images/logo/urclass.png');
+        $logoBase64 = file_exists($logoPath) ? 'data:image/png;base64,' . base64_encode(file_get_contents($logoPath)) : null;
 
         $pdf = PDF::loadView('pdf.tryout', [
             'tryout' => $tryout,
             'subtests' => $subtests,
+            'logoBase64' => $logoBase64,
         ], [], [
             'title' => 'Tryout ' . $tryout->title,
-            'margin_top' => 15,
-            'margin_bottom' => 15,
-            'margin_left' => 15,
-            'margin_right' => 15,
-            'watermark_image_path' => public_path('images/logo/urclass.png'),
-            'watermark_image_alpha' => 0.08,
-            'watermark_image_size' => 'D',
-            'show_watermark_image' => true,
+            'margin_top' => 12,
+            'margin_bottom' => 14,
+            'margin_left' => 14,
+            'margin_right' => 14,
+            'show_watermark_image' => false,
+            'show_watermark' => false,
         ]);
 
-        return $pdf->download('Tryout_' . Str::slug($tryout->title) . '.pdf');
+        return $pdf->stream('Tryout_' . Str::slug($tryout->title) . '.pdf');
     }
 }

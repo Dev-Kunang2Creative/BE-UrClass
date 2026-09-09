@@ -2,7 +2,6 @@
 
 namespace Database\Seeders;
 
-use App\Models\Package;
 use App\Models\Subtest;
 use App\Models\Tryout;
 use App\Models\TryoutSubtest;
@@ -12,6 +11,10 @@ use Illuminate\Database\Seeder;
 /**
  * Sample CPNS content so the CPNS dashboard is not empty.
  * UTBK content predates the kategori column and defaults to 'utbk'.
+ *
+ * Tryouts and subtests only. This used to seed two SKD ticket packages as well,
+ * but packages are not per-track: a ticket is one balance spendable on either
+ * jalur, so the catalogue lives entirely in PackageSeeder now.
  */
 class CpnsContentSeeder extends Seeder
 {
@@ -55,36 +58,6 @@ class CpnsContentSeeder extends Seeder
                     ['duration_minutes' => 30, 'is_active' => true]
                 );
             }
-        }
-
-        $packages = [
-            [
-                'name'           => 'Paket SKD Starter',
-                'description'    => 'Paket pemula persiapan CPNS. 5 tiket tryout SKD dengan pembahasan.',
-                'price'          => 99000,
-                'discount_price' => null,
-                'ticket_amount'  => 5,
-            ],
-            [
-                'name'           => 'Paket SKD Intensif',
-                'description'    => 'Paket intensif CPNS: 20 tiket tryout SKD, analisa passing grade, dan pembahasan lengkap.',
-                'price'          => 349000,
-                'discount_price' => 249000,
-                'ticket_amount'  => 20,
-            ],
-        ];
-
-        foreach ($packages as $data) {
-            Package::updateOrCreate(
-                ['name' => $data['name']],
-                array_merge($data, [
-                    'slug'       => str($data['name'])->slug(),
-                    'currency'   => 'IDR',
-                    'is_active'  => true,
-                    'kategori'   => 'cpns',
-                    'created_by' => $adminId,
-                ])
-            );
         }
     }
 }

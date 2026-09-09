@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Question;
 use App\Models\QuestionOption;
 use App\Models\Subtest;
+use App\Services\ScoringService;
 use App\Support\RichTextSanitizer;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,8 +25,30 @@ class QuestionController extends Controller
             ->orderBy('id')
             ->get();
 
+        $scheme = ScoringService::schemeFor($subtest);
+
+        // Soal TKP yang bobotnya belum digarap tetap menghasilkan angka, hanya
+        // angka yang salah, jadi tanpa penanda ini kesalahannya tidak terlihat
+        // di mana pun sampai peserta melihat nilainya sendiri.
+        if ($scheme === ScoringService::SCHEME_OPTION_WEIGHT) {
+            $questions->each(function (Question $question) {
+                $question->setAttribute(
+                    'needs_option_weight',
+                    ScoringService::validateOptionWeights(
+                        $question->options->pluck('score')->all(),
+                    ) !== null,
+                );
+            });
+        }
+
         return response()->json([
             'data' => $questions,
+            'meta' => [
+                'scoring_scheme' => $scheme,
+                'needs_option_weight_count' => $questions
+                    ->where('needs_option_weight', true)
+                    ->count(),
+            ],
         ]);
     }
 
@@ -43,9 +66,9 @@ class QuestionController extends Controller
         $validated = $request->validate([
             'question_type' => ['nullable', 'string', Rule::in(['multiple_choice', 'essay'])],
             'question_text' => ['nullable', 'string'],
-            'question_image' => ['nullable', 'image', 'max:2048'],
+            'question_image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'discussion' => ['nullable', 'string'],
-            'discussion_image' => ['nullable', 'image', 'max:2048'],
+            'discussion_image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'correct_answer' => ['nullable', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'order_no' => ['nullable', 'integer', 'min:1'],
             'is_active' => ['nullable', 'boolean'],
@@ -53,16 +76,37 @@ class QuestionController extends Controller
             'options' => ['nullable', 'array'],
             'options.*.option_key' => ['required', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'options.*.option_text' => ['nullable', 'string'],
-            'options.*.image' => ['nullable', 'image', 'max:2048'],
+            'options.*.image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'options.*.score' => ['nullable', 'numeric', 'min:0', 'max:100'],
         ]);
 
         $validated['question_type'] = $validated['question_type'] ?? 'multiple_choice';
         $validated['options'] = $validated['options'] ?? [];
 
+        $weighted = $validated['question_type'] === 'multiple_choice'
+            && ScoringService::schemeFor($subtest) === ScoringService::SCHEME_OPTION_WEIGHT;
+
         if ($validated['question_type'] === 'multiple_choice') {
             if (count($validated['options']) < 2) {
                 return response()->json(['message' => 'Minimal 2 opsi jawaban harus diisi.'], 422);
+            }
+
+            // Subtes berbobot per opsi (TKP SKD) tidak punya kunci jawaban:
+            // kelima opsi bernilai, dari 1 sampai 5. Yang dicatat sebagai
+            // "benar" adalah opsi berbobot tertinggi, diturunkan dari bobotnya
+            // supaya kunci dan bobot tidak mungkin saling bertentangan.
+            if ($weighted) {
+                $weightError = ScoringService::validateOptionWeights(
+                    collect($validated['options'])->pluck('score')->all(),
+                );
+
+                if ($weightError !== null) {
+                    return response()->json(['message' => $weightError], 422);
+                }
+
+                $validated['correct_answer'] = collect($validated['options'])
+                    ->sortByDesc(fn ($option) => (float) $option['score'])
+                    ->first()['option_key'];
             }
 
             if (empty($validated['correct_answer'])) {
@@ -148,9 +192,9 @@ class QuestionController extends Controller
         $validated = $request->validate([
             'question_type' => ['nullable', 'string', Rule::in(['multiple_choice', 'essay'])],
             'question_text' => ['nullable', 'string'],
-            'question_image' => ['nullable', 'image', 'max:2048'],
+            'question_image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'discussion' => ['nullable', 'string'],
-            'discussion_image' => ['nullable', 'image', 'max:2048'],
+            'discussion_image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'correct_answer' => ['nullable', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'order_no' => ['required', 'integer', 'min:1'],
             'is_active' => ['required', 'boolean'],
@@ -158,7 +202,7 @@ class QuestionController extends Controller
             'options' => ['nullable', 'array'],
             'options.*.option_key' => ['required', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'options.*.option_text' => ['nullable', 'string'],
-            'options.*.image' => ['nullable', 'image', 'max:2048'],
+            'options.*.image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'options.*.score' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'delete_question_image' => ['nullable', 'boolean'],
             'delete_discussion_image' => ['nullable', 'boolean'],
@@ -167,9 +211,30 @@ class QuestionController extends Controller
         $validated['question_type'] = $validated['question_type'] ?? 'multiple_choice';
         $validated['options'] = $validated['options'] ?? [];
 
+        $weighted = $validated['question_type'] === 'multiple_choice'
+            && ScoringService::schemeFor($subtest) === ScoringService::SCHEME_OPTION_WEIGHT;
+
         if ($validated['question_type'] === 'multiple_choice') {
             if (count($validated['options']) < 2) {
                 return response()->json(['message' => 'Minimal 2 opsi jawaban harus diisi.'], 422);
+            }
+
+            // Subtes berbobot per opsi (TKP SKD) tidak punya kunci jawaban:
+            // kelima opsi bernilai, dari 1 sampai 5. Yang dicatat sebagai
+            // "benar" adalah opsi berbobot tertinggi, diturunkan dari bobotnya
+            // supaya kunci dan bobot tidak mungkin saling bertentangan.
+            if ($weighted) {
+                $weightError = ScoringService::validateOptionWeights(
+                    collect($validated['options'])->pluck('score')->all(),
+                );
+
+                if ($weightError !== null) {
+                    return response()->json(['message' => $weightError], 422);
+                }
+
+                $validated['correct_answer'] = collect($validated['options'])
+                    ->sortByDesc(fn ($option) => (float) $option['score'])
+                    ->first()['option_key'];
             }
 
             if (empty($validated['correct_answer'])) {
@@ -271,7 +336,19 @@ class QuestionController extends Controller
             ], 422);
         }
 
+        $imagePaths = collect([
+            $question->question_image,
+            $question->discussion_image,
+            ...$question->options()->pluck('image')->all(),
+        ])->filter()->values()->all();
+
         $question->delete();
+
+        // File tidak ikut terhapus oleh soft delete/database cascade. Hapus
+        // setelah record berhasil dihapus agar storage tidak dipenuhi orphan.
+        if ($imagePaths !== []) {
+            Storage::disk('public')->delete($imagePaths);
+        }
 
         return response()->json([
             'message' => 'Soal berhasil dihapus',

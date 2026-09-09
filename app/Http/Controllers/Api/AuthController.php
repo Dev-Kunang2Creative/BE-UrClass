@@ -56,7 +56,7 @@ class AuthController extends Controller
             'password' => ['required', 'string'],
         ]);
 
-        $user = User::where('email', $validated['email'])->first();
+        $user = User::real()->where('email', $validated['email'])->first();
         
         if ($user && !$user->password) {
             throw ValidationException::withMessages([
@@ -83,6 +83,23 @@ class AuthController extends Controller
             'user' => $user,
             'token' => $token,
         ]);
+    }
+
+    /**
+     * Target for the route named "login", which this API-only app never had.
+     *
+     * Laravel falls back to route('login') when it decides an unauthenticated
+     * request should be redirected rather than answered with JSON. Two
+     * attempts to stop it deciding that - shouldRenderJsonWhen covering
+     * api/*, then an explicit render() callback for AuthenticationException -
+     * both failed to take effect on this deployment, while a ValidationException
+     * on the same host does render as JSON without an Accept header. Rather
+     * than keep guessing at why, the route it asks for now exists and answers
+     * 401, so no path can end in a 500 about a missing route.
+     */
+    public function loginNotice(): JsonResponse
+    {
+        return response()->json(['message' => 'Unauthenticated.'], 401);
     }
 
     public function me(Request $request): JsonResponse
@@ -117,7 +134,7 @@ class AuthController extends Controller
         try {
             $googleUser = Socialite::driver('google')->stateless()->user();
             
-            $user = User::where('email', $googleUser->getEmail())->first();
+            $user = User::real()->where('email', $googleUser->getEmail())->first();
 
             if (!$user) {
                 $user = User::create([

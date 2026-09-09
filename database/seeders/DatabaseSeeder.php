@@ -11,6 +11,7 @@ class DatabaseSeeder extends Seeder
         $this->call([
             AdminUserSeeder::class,
             UserSeeder::class,
+            SubtestCategorySeeder::class,
             SubtestSeeder::class,
             TryoutSeeder::class,
             QuestionSeeder::class,
@@ -18,6 +19,10 @@ class DatabaseSeeder extends Seeder
             CpnsContentSeeder::class,
             CpnsQuestionSeeder::class,
             PerguruanTinggiSeeder::class,
+            ProofRequirementSeeder::class,
+            AiSettingSeeder::class,
+            KedinasanSeeder::class,
+            InstansiFormasiSeeder::class,
         ]);
     }
 }

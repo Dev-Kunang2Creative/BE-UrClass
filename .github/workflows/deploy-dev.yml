@@ -13,6 +13,10 @@ on:
         description: 'DESTRUCTIVE: drop every table, re-migrate and re-seed the dev database'
         type: boolean
         default: false
+      reseed_packages:
+        description: 'Re-run PackageSeeder only: refresh the ticket packages and retire the per-track ones'
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-dev-api
@@ -182,9 +186,10 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_USER: ${{ secrets.SSH_USER }}
           FRESH: ${{ inputs.fresh_database }}
+          RESEED_PACKAGES: ${{ inputs.reseed_packages }}
         run: |
           ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" $SSH_OPTS "$SSH_USER@$SSH_HOST" \
-            "DEPLOY_PATH='$DEPLOY_PATH' FRESH='$FRESH' bash -s" <<'REMOTE'
+            "DEPLOY_PATH='$DEPLOY_PATH' FRESH='$FRESH' RESEED_PACKAGES='$RESEED_PACKAGES' bash -s" <<'REMOTE'
           set -euo pipefail
           cd "$DEPLOY_PATH"
           php_bin=""
@@ -224,14 +229,99 @@ jobs:
             fi
           fi
 
+          # PackageSeeder is idempotent on its own (keyed by slug), so it can be
+          # re-run to pick up catalogue changes without a full reseed.
+          if [ "${RESEED_PACKAGES:-false}" = "true" ] && [ "$FRESH" != "true" ]; then
+            echo "--- db:seed --class=PackageSeeder (by request)"
+            "$php_bin" artisan db:seed --class=PackageSeeder --force
+          elif [ "$FRESH" != "true" ] && [ ! -f storage/.packages-unified ]; then
+            # One-off: the catalogue stopped being per-track, so the dev rows
+            # need the new names and the two SKD packages need retiring. The
+            # database was already seeded before that change, so the seed-once
+            # marker would have skipped it forever. Deliberately not guarded by
+            # anything prod-shaped: the production workflow runs neither migrate
+            # nor db:seed, so live package rows are never touched from here.
+            echo "--- db:seed --class=PackageSeeder (one-off catalogue merge)"
+            "$php_bin" artisan db:seed --class=PackageSeeder --force
+            touch storage/.packages-unified
+          fi
+
           "$php_bin" artisan cache:clear || echo "cache:clear skipped"
 
           # artisan storage:link cannot work here: this host disables both
           # symlink() and exec() in PHP.
-          if [ ! -e public/storage ]; then
+          #
+          # Tested with -d, not -e. A symlink whose target is missing fails -d
+          # but passes -e, so the old check left a dangling link in place
+          # forever - and a dangling link under public/ is served as 403, which
+          # is what /storage/<anything> currently returns on dev while prod
+          # returns a normal 404. Every uploaded banner and package thumbnail
+          # is behind that path.
+          if [ ! -d public/storage ]; then
+            rm -f public/storage
+            mkdir -p storage/app/public
             ln -s ../storage/app/public public/storage
-            echo "public/storage -> $(readlink public/storage)"
+            echo "public/storage recreated -> $(readlink public/storage)"
           fi
+
+          # Reference data for the target-campus pickers in the profile form.
+          # storage/.seeded predates this seeder, so a database seeded before
+          # it existed has empty perguruan_tinggi / program_studi tables and
+          # the pickers would offer nothing. It upserts on the official
+          # kode_ptn / kode_prodi, so re-running it is safe.
+          if [ "$FRESH" != "true" ] && [ ! -f storage/.ptn-seeded ]; then
+            echo "--- db:seed --class=PerguruanTinggiSeeder (one-off reference data)"
+            "$php_bin" artisan db:seed --class=PerguruanTinggiSeeder --force
+            touch storage/.ptn-seeded
+          fi
+
+          # Same problem, later seeders: storage/.seeded predates all of these,
+          # so the seed-once guard above skips db:seed entirely and a database
+          # seeded before they existed never gets their rows. Each upserts on a
+          # stable key, so re-running is safe; each gets its own marker so
+          # adding the next one does not re-run the previous.
+          #
+          # subtest-categories is the one that fails loudly rather than quietly:
+          # SubtestController validates category against that table, so without
+          # rows an admin cannot create or update any subtest at all. The rest
+          # degrade quietly - empty pickers, no follow-proof accounts.
+          for pair in \
+            "subtest-categories:SubtestCategorySeeder" \
+            "proof-requirements:ProofRequirementSeeder" \
+            "ai-settings:AiSettingSeeder" \
+            "kedinasan:KedinasanSeeder" \
+            "instansi:InstansiFormasiSeeder" ; do
+            marker="storage/.${pair%%:*}-seeded"
+            class="${pair##*:}"
+
+            if [ "$FRESH" != "true" ] && [ ! -f "$marker" ]; then
+              echo "--- db:seed --class=$class (one-off reference data)"
+              "$php_bin" artisan db:seed --class="$class" --force
+              touch "$marker"
+            fi
+          done
+
+          echo "--- storage exposure"
+          ls -ld public/storage storage/app/public 2>&1 || true
+          if [ -L public/storage ]; then
+            echo "symlink target: $(readlink public/storage)"
+            echo "target resolves: $([ -d public/storage ] && echo yes || echo NO)"
+          fi
+          # storage/ is excluded from rsync, so anything sitting in here
+          # survives every deploy - including an .htaccess that would deny the
+          # whole uploads tree.
+          echo "contents:"
+          ls -la storage/app/public 2>&1 | head -20 || true
+          for f in storage/app/public/.htaccess public/.htaccess; do
+            if [ -f "$f" ] && grep -qiE "deny|Require all denied" "$f"; then
+              echo "!! $f contains a deny rule:"
+              grep -inE "deny|Require all denied" "$f" | head -5
+            fi
+          done
+
+          # A known file, so the verify step can prove uploads are reachable
+          # rather than inferring it from a 403-versus-404 guess.
+          echo storage-ok > storage/app/public/deploy-probe.txt
 
           "$php_bin" artisan config:cache
           "$php_bin" artisan route:cache
@@ -263,6 +353,22 @@ jobs:
           probe "/up               php + laravel boot + rewrite chain" 200 "$BASE_URL/up"
           probe "/                 database sessions"                  200 "$BASE_URL/"
           probe "/api/auth/me      api routing + sanctum guard"        401 $JSON "$BASE_URL/api/auth/me"
+          # Deliberately without $JSON. Every probe here sent
+          # Accept: application/json, which is why a browser hitting the API
+          # returned 500 "Route [login] not defined" unnoticed - the app always
+          # sends the header, so nothing in the suite ever asked the question.
+          # Not a fixed status: whichever branch the framework takes, the
+          # answer must not be a 500 about a missing login route. A JSON 401
+          # is the direct answer; a 302 lands on the named route, which
+          # answers 401 itself. Every other probe here sends
+          # Accept: application/json, and so does the app, which is why this
+          # went unnoticed - nothing ever asked the question.
+          echo "--- api without an Accept header must not 500"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE_URL/api/auth/me" || echo 000)
+          case "$code" in
+            401|302) echo "  PASS  /api/auth/me without Accept -> $code" ;;
+            *) echo "  FAIL  /api/auth/me without Accept -> $code (expected 401 or 302)"; fail=1 ;;
+          esac
           probe "/api/auth/login   api -> database (bad creds)"        422 $JSON -X POST \
             -d 'email=deploy-probe@example.invalid' -d 'password=wrong' "$BASE_URL/api/auth/login"
           probe "/.env             secrets not web-readable"           403 "$BASE_URL/.env"
@@ -277,6 +383,20 @@ jobs:
             echo "  PASS  users table queryable (422 on bad credentials)"
           else
             echo "  FAIL  unexpected $code from login"; fail=1
+          fi
+
+          # Every tryout banner and package thumbnail is served from /storage.
+          # A warning rather than a failure: it is an environment problem, not
+          # something a code change introduced, and blocking the deploy on it
+          # would stop unrelated work from shipping.
+          echo "--- uploads are web-reachable"
+          probe_url="$BASE_URL/storage/deploy-probe.txt"
+          code=$(curl -s -o /tmp/probe -w '%{http_code}' "$probe_url" || echo 000)
+          if [ "$code" = "200" ] && grep -q storage-ok /tmp/probe; then
+            echo "  PASS  /storage is served - uploaded banners will render"
+          else
+            echo "  INFO  $probe_url -> $code"
+            echo "::warning::uploads are not web-reachable ($code) - tryout banners and package thumbnails will not render on this host"
           fi
 
           echo "--- dev must not be indexable"

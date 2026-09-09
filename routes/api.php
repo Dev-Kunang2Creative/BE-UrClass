@@ -1,6 +1,16 @@
 <?php
 
 use App\Http\Controllers\Api\AccessCodeController;
+use App\Http\Controllers\Api\AdminAiSettingController;
+use App\Http\Controllers\Api\AdminAiLiveController;
+use App\Http\Controllers\Api\AdminAiQuotaController;
+use App\Http\Controllers\Api\AdminAiUsageController;
+use App\Http\Controllers\Api\AdminFormasiImportController;
+use App\Http\Controllers\Api\AdminDummyParticipantController;
+use App\Http\Controllers\Api\AdminInstansiController;
+use App\Http\Controllers\Api\ProofRequirementController;
+use App\Http\Controllers\Api\AiChatController;
+use App\Http\Controllers\Api\InstansiController;
 use App\Http\Controllers\Api\AdminAccessCodeController;
 use App\Http\Controllers\Api\AdminOrderController;
 use App\Http\Controllers\Api\AdminPackageController;
@@ -22,6 +32,7 @@ use App\Http\Controllers\Api\AdminSalesReportController;
 use App\Http\Controllers\Api\AdminTicketRedeemCodeController;
 use App\Http\Controllers\Api\AdminTryoutProofController;
 use App\Http\Controllers\Api\BulkImportQuestionController;
+use App\Http\Controllers\Api\SubtestCategoryController;
 use App\Http\Controllers\Api\TicketLogController;
 use Illuminate\Support\Facades\Route;
 
@@ -32,6 +43,7 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::post('/midtrans/callback', [PaymentCallbackController::class, 'handle']);
+Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
 
 Route::prefix('auth')->controller(AuthController::class)->group(function () {
     Route::post('/register', 'register')->middleware('throttle:5,1');
@@ -55,6 +67,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/profile/kategori', [ProfileController::class, 'updateKategori'])->middleware('throttle:15,1');
     Route::post('/access-codes/redeem', [AccessCodeController::class, 'redeem']);
     Route::get('/ticket-logs', [TicketLogController::class, 'index']);
+
+    // Dibaca halaman pendaftaran tryout gratis untuk menampilkan akun yang
+    // harus di-follow sekaligus menentukan berapa bukti yang diminta.
+    Route::get('/proof-requirements', [ProofRequirementController::class, 'index']);
+
+    // Asisten AI. Throttle di sini menahan banjir permintaan; kuota harian per
+    // peserta ada di controller karena angkanya bisa diatur admin.
+    Route::get('/chat/status', [AiChatController::class, 'status']);
+    Route::post('/chat', [AiChatController::class, 'send'])->middleware('throttle:20,1');
     Route::get('/subtests', [SubtestController::class, 'index']);
 
     // Reference data for the target-campus pickers. Read-only; refreshed by
@@ -65,6 +86,15 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/perguruan-tinggi/{perguruanTinggi}/program-studi', [PerguruanTinggiController::class, 'programStudi']);
     Route::get('/program-studi/jenjang', [PerguruanTinggiController::class, 'jenjang']);
     Route::get('/program-studi', [PerguruanTinggiController::class, 'searchProgramStudi']);
+
+    // Target pelamar CPNS umum. Dua tingkat seperti kampus/prodi, supaya picker
+    // yang sama bisa dipakai untuk keduanya.
+    Route::get('/instansi', [InstansiController::class, 'index']);
+    Route::get('/instansi/{instansi}/formasi', [InstansiController::class, 'formasi']);
+    Route::get('/formasi', [InstansiController::class, 'searchFormasi']);
+    // Dipakai form profil untuk tahu apakah daftar formasi periode ini sudah
+    // terbit. Kalau belum, kolomnya diganti pemberitahuan alih-alih picker kosong.
+    Route::get('/formasi/status', [InstansiController::class, 'status']);
 
     // Package & Orders
     Route::apiResource('packages', PackageCatalogController::class)->only(['index', 'show']);
@@ -77,6 +107,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::controller(UserTryoutController::class)->group(function () {
         Route::get('/tryouts', 'index');
         Route::get('/my-tryouts', 'myTryouts');
+        // Declared before the tryouts/{tryout} prefix group below so the
+        // detail route is matched, not swallowed by one of its children.
+        Route::get('/tryouts/{tryout}', 'show');
 
         Route::prefix('tryouts/{tryout}')->group(function () {
             Route::post('/enroll', 'enroll');
@@ -126,17 +159,71 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::get('/users', [AdminUserController::class, 'index']);
         Route::get('/users/export', [AdminUserController::class, 'export']);
         Route::get('/users/{user}', [AdminUserController::class, 'show']);
+        // Penyesuaian tiket tangan. Throttle-nya ketat: ini mengubah sesuatu
+        // yang bernilai uang bagi peserta, dan tidak ada alasan sah untuk
+        // melakukannya berulang kali dalam semenit.
+        Route::post('/users/{user}/tickets', [AdminUserController::class, 'adjustTickets'])
+            ->middleware('throttle:20,1');
         Route::delete('/users/{user}', [AdminUserController::class, 'destroy']);
 
         // --- SUBTEST & MASTER SOAL ---
+        Route::get('/subtest-categories', [SubtestCategoryController::class, 'adminIndex']);
+        Route::post('/subtest-categories', [SubtestCategoryController::class, 'store']);
+        Route::put('/subtest-categories/{subtestCategory}', [SubtestCategoryController::class, 'update']);
+        Route::patch('/subtest-categories/{subtestCategory}/toggle-active', [SubtestCategoryController::class, 'toggleActive']);
+        Route::delete('/subtest-categories/{subtestCategory}', [SubtestCategoryController::class, 'destroy']);
+
         Route::apiResource('subtests', SubtestController::class)->except(['index']);
         Route::apiResource('subtests.questions', QuestionController::class);
         Route::post('/subtests/{subtest}/questions/bulk-import', [BulkImportQuestionController::class, 'store']);
-        Route::post('/subtests/{subtest}/questions/bulk-update-images', [BulkImportQuestionController::class, 'updateImagesFromExcel']);
-        Route::get('/questions/bulk-import/template', [BulkImportQuestionController::class, 'template']);
         Route::get('/questions/bulk-import/excel-template', [BulkImportQuestionController::class, 'excelTemplate']);
 
+        // Instansi dan formasi. Rekap formasi resmi tidak tersedia dalam bentuk
+        // yang bisa diunduh, jadi tanpa endpoint ini formasi hanya bisa masuk
+        // lewat seeder di server.
+        Route::get('/instansi', [AdminInstansiController::class, 'index']);
+        Route::post('/instansi', [AdminInstansiController::class, 'storeInstansi']);
+        Route::put('/instansi/{instansi}', [AdminInstansiController::class, 'updateInstansi']);
+        Route::delete('/instansi/{instansi}', [AdminInstansiController::class, 'destroyInstansi']);
+        Route::get('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'formasi']);
+        Route::post('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'storeFormasi']);
+        Route::delete('/instansi/{instansi}/formasi/{formasi}', [AdminInstansiController::class, 'destroyFormasi']);
+
+        // Impor massal. Satu periode seleksi bisa memuat ribuan formasi, jadi
+        // mengisinya lewat form per baris bukan pilihan yang masuk akal.
+        Route::post('/formasi/import', [AdminFormasiImportController::class, 'store']);
+        Route::get('/formasi/import/template', [AdminFormasiImportController::class, 'template']);
+
+        // Pengaturan asisten AI. Kunci API tidak pernah dikirim balik - yang
+        // keluar hanya bentuk tersamar.
+        Route::get('/ai-settings', [AdminAiSettingController::class, 'show']);
+        Route::put('/ai-settings', [AdminAiSettingController::class, 'update']);
+        Route::post('/ai-settings/test', [AdminAiSettingController::class, 'test'])->middleware('throttle:10,1');
+        Route::post('/ai-settings/models', [AdminAiSettingController::class, 'models'])->middleware('throttle:20,1');
+        Route::get('/ai-usage', [AdminAiUsageController::class, 'index']);
+        // Pemakaian yang sedang berlangsung. Throttle-nya longgar karena
+        // halamannya menyegarkan diri setiap beberapa detik, dan seluruh
+        // datanya berasal dari database sendiri - bukan dari provider.
+        Route::get('/ai-live', [AdminAiLiveController::class, 'index'])->middleware('throttle:240,1');
+        // Kuota dibaca dari provider, jadi throttle-nya lebih ketat daripada
+        // laporan yang dihitung dari database sendiri.
+        Route::get('/ai-quota', [AdminAiQuotaController::class, 'show'])->middleware('throttle:30,1');
+
+        Route::get('/proof-requirements', [ProofRequirementController::class, 'adminIndex']);
+        Route::post('/proof-requirements', [ProofRequirementController::class, 'store']);
+        // Urutan ditetapkan sekaligus: menggeser satu syarat selalu mengubah
+        // posisi yang lain, jadi mengirimnya satu-satu melewati keadaan di mana
+        // dua baris punya urutan sama.
+        Route::put('/proof-requirements/reorder', [ProofRequirementController::class, 'reorder']);
+        Route::put('/proof-requirements/{proofRequirement}', [ProofRequirementController::class, 'update']);
+        Route::delete('/proof-requirements/{proofRequirement}', [ProofRequirementController::class, 'destroy']);
+
         // --- TRYOUT & PENGATURAN TRYOUT ---
+        Route::get('/tryouts/dummy-excel-template', [AdminDummyParticipantController::class, 'template']);
+        Route::post('/tryouts/{tryout}/inject-dummy-random', [AdminDummyParticipantController::class, 'injectRandom']);
+        Route::post('/tryouts/{tryout}/inject-dummy-excel', [AdminDummyParticipantController::class, 'injectExcel']);
+        Route::delete('/tryouts/{tryout}/clear-dummy', [AdminDummyParticipantController::class, 'clear']);
+        Route::get('/tryouts/{tryout}/dummy-summary', [AdminDummyParticipantController::class, 'summary']);
         Route::get('/tryouts/{tryout}/participants', [TryoutController::class, 'participants']);
         Route::apiResource('tryouts', TryoutController::class);
         Route::get('/tryouts/{tryout}/export-pdf', [TryoutController::class, 'exportPdf']);

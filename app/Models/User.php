@@ -8,6 +8,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Database\Eloquent\Concerns\HasUlids;
+use Illuminate\Database\Eloquent\Builder;
 
 class User extends Authenticatable
 {
@@ -18,6 +19,7 @@ class User extends Authenticatable
         'email',
         'password',
         'role',
+        'is_dummy',
         'kategori',
         'google_id',
         'phone_number',
@@ -25,10 +27,20 @@ class User extends Authenticatable
         'gender',
         'school_origin',
         'grade_level',
+        'province',
+        'city',
         'target_university_1',
         'target_major_1',
         'target_university_2',
         'target_major_2',
+        // Target jalur CPNS. Sekolah kedinasan memakai target_university_* dan
+        // target_major_* di atas karena bentuknya sama dengan target PTN;
+        // pelamar CPNS umum memakai instansi dan formasi di bawah.
+        'cpns_target_type',
+        'target_instansi_1',
+        'target_formasi_1',
+        'target_instansi_2',
+        'target_formasi_2',
         'ticket_balance',
     ];
 
@@ -42,7 +54,18 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_dummy' => 'boolean',
         ];
+    }
+
+    public function scopeReal(Builder $query): Builder
+    {
+        return $query->where('is_dummy', false);
+    }
+
+    public function scopeDummy(Builder $query): Builder
+    {
+        return $query->where('is_dummy', true);
     }
 
     public function setNameAttribute($value): void
@@ -78,6 +101,11 @@ class User extends Authenticatable
     public function setTargetMajor2Attribute($value): void
     {
         $this->attributes['target_major_2'] = $value !== null ? strip_tags(trim($value)) : $value;
+    }
+
+    public function aiUsageLogs()
+    {
+        return $this->hasMany(AiUsageLog::class);
     }
 
     public function createdTryouts()

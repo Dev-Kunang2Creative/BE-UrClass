@@ -24,9 +24,9 @@ class SubtestSeeder extends Seeder
             ['name' => 'Literasi dalam Bahasa Inggris',     'category' => 'Literasi','exam_type' => 'utbk', 'max_questions' => 20],
             ['name' => 'Penalaran Matematika',              'category' => 'Literasi','exam_type' => 'utbk', 'max_questions' => 20],
             // CPNS
-            ['name' => 'Tes Wawasan Kebangsaan (TWK)',      'category' => 'TPS',     'exam_type' => 'cpns', 'max_questions' => 30],
-            ['name' => 'Tes Intelegensi Umum (TIU)',        'category' => 'TPS',     'exam_type' => 'cpns', 'max_questions' => 35],
-            ['name' => 'Tes Karakteristik Pribadi (TKP)',   'category' => 'TPS',     'exam_type' => 'cpns', 'max_questions' => 45],
+            ['name' => 'Tes Wawasan Kebangsaan (TWK)',      'category' => 'TWK',     'exam_type' => 'cpns', 'max_questions' => 30],
+            ['name' => 'Tes Intelegensi Umum (TIU)',        'category' => 'TIU',     'exam_type' => 'cpns', 'max_questions' => 35],
+            ['name' => 'Tes Karakteristik Pribadi (TKP)',   'category' => 'TKP',     'exam_type' => 'cpns', 'max_questions' => 45],
         ];
 
         foreach ($items as $item) {
@@ -35,9 +35,18 @@ class SubtestSeeder extends Seeder
                 ['category' => $item['category'], 'exam_type' => $item['exam_type'], 'max_questions' => $item['max_questions']]
             );
 
-            // TKP is scored per-option (1-5), not right/wrong. See ScoringService.
+            // Skemanya mengikuti jalur: UTBK selalu IRT, TKP bobot per opsi,
+            // sisanya benar/salah. Lihat ScoringService::defaultSchemeFor.
+            $scheme = ScoringService::defaultSchemeFor($subtest);
+
             $subtest->update([
-                'scoring_scheme' => ScoringService::defaultSchemeFor($subtest),
+                'scoring_scheme' => $scheme,
+                // SKD gives 5 points per correct TWK/TIU answer, which is what
+                // makes the passing grades (65 of 150, 80 of 175) mean anything.
+                // Pada IRT tidak ada poin yang ditetapkan, jadi tetap 1.
+                'score_correct' => $scheme === ScoringService::SCHEME_RIGHT_WRONG
+                    ? ScoringService::CPNS_SCORE_CORRECT
+                    : 1,
             ]);
         }
     }

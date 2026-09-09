@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\TicketLog;
 use App\Models\Tryout;
+use App\Models\ProofRequirement;
 use App\Models\Question;
 use App\Models\TryoutSession;
 use App\Models\TryoutSubtest;
@@ -62,20 +63,95 @@ class UserTryoutController extends Controller
             ->get();
 
         $tryouts->each(function ($tryout) use ($accessByTryout, $sessionStatsByTryout, $sessionsByTryout) {
-            $access = $accessByTryout->get($tryout->id);
-            $session = $sessionsByTryout->get($tryout->id);
-            $sessionStats = $sessionStatsByTryout->get($tryout->id);
-
-            $tryout->setAttribute('user_is_enrolled', (bool) $access);
-            $tryout->setAttribute('user_attempt_count', (int) ($sessionStats?->attempt_count ?? 0));
-            $tryout->setAttribute('user_session_status', $session?->status ?? ($access ? 'not_started' : null));
-            $tryout->setAttribute('user_started_at', $session?->started_at);
-            $tryout->setAttribute('user_finished_at', $session?->finished_at);
+            $this->decorateUserState(
+                $tryout,
+                $accessByTryout->get($tryout->id),
+                $sessionsByTryout->get($tryout->id),
+                (int) ($sessionStatsByTryout->get($tryout->id)?->attempt_count ?? 0),
+            );
         });
 
         return response()->json([
             'data' => $tryouts,
         ]);
+    }
+
+    /**
+     * One tryout, shaped exactly like one item of index().
+     *
+     * There was no such endpoint, so the frontend fetched the whole list and
+     * picked the id out of it on the client: every detail view downloaded every
+     * tryout, and because that list is filtered by track, a tryout belonging to
+     * the other jalur came back as "not found" rather than as what it is.
+     */
+    public function show(Request $request, Tryout $tryout): JsonResponse
+    {
+        $user = $request->user();
+
+        if (! $tryout->is_published) {
+            return response()->json(['message' => 'Tryout ini tidak tersedia'], 404);
+        }
+
+        $userKategori = $user->kategori ?? 'utbk';
+
+        // Not a 404: the tryout exists and the reader may well have meant to
+        // open it. Saying which jalur it belongs to lets the client offer to
+        // switch instead of claiming the thing does not exist.
+        if (($tryout->kategori ?? 'utbk') !== $userKategori) {
+            return response()->json([
+                'message' => 'Tryout ini ada di jalur lain.',
+                'kategori' => $tryout->kategori ?? 'utbk',
+            ], 403);
+        }
+
+        $tryout->load([
+            'creator',
+            'tryoutSubtests.subtest' => fn ($query) => $query->withCount([
+                'questions' => fn ($questionQuery) => $questionQuery->where('is_active', true),
+            ]),
+        ]);
+        $tryout->loadCount('userAccesses');
+
+        $access = UserTryoutAccess::where('user_id', $user->id)
+            ->where('tryout_id', $tryout->id)
+            ->first();
+
+        $session = TryoutSession::where('user_id', $user->id)
+            ->where('tryout_id', $tryout->id)
+            ->orderByDesc('attempt_number')
+            ->orderByDesc('created_at')
+            ->first();
+
+        $attemptCount = TryoutSession::where('user_id', $user->id)
+            ->where('tryout_id', $tryout->id)
+            ->count();
+
+        $this->decorateUserState($tryout, $access, $session, $attemptCount);
+
+        return response()->json([
+            'data' => $tryout,
+        ]);
+    }
+
+    /**
+     * The per-user attributes the client reads off a tryout. Shared by index()
+     * and show() so a detail view can never disagree with the list it came
+     * from about whether someone is enrolled or mid-attempt.
+     */
+    private function decorateUserState(
+        Tryout $tryout,
+        ?UserTryoutAccess $access,
+        ?TryoutSession $session,
+        int $attemptCount,
+    ): void {
+        $tryout->setAttribute('user_is_enrolled', (bool) $access);
+        $tryout->setAttribute('user_attempt_count', $attemptCount);
+        $tryout->setAttribute(
+            'user_session_status',
+            $session?->status ?? ($access ? 'not_started' : null)
+        );
+        $tryout->setAttribute('user_started_at', $session?->started_at);
+        $tryout->setAttribute('user_finished_at', $session?->finished_at);
     }
 
     public function enroll(Request $request, Tryout $tryout): JsonResponse
@@ -93,19 +169,51 @@ class UserTryoutController extends Controller
         // --- JIKA TRYOUT GRATIS ---
         if ($tryout->is_free) {
             
-            $validator = Validator::make($request->all(), [
-                'proof_images' => ['required', 'array', 'min:2', 'max:5'],
-                'proof_images.*' => ['required', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'],
-            ], [
-                'proof_images.required' => 'Bukti follow Instagram wajib diunggah untuk mengikuti tryout gratis.',
-                'proof_images.array' => 'Bukti follow harus dikirim sebagai daftar gambar.',
-                'proof_images.min' => 'Minimal unggah 2 bukti follow Instagram.',
-                'proof_images.max' => 'Maksimal unggah 5 bukti follow Instagram.',
-                'proof_images.*.required' => 'Setiap bukti follow wajib berupa gambar.',
-                'proof_images.*.image' => 'Setiap bukti harus berupa gambar.',
-                'proof_images.*.mimes' => 'Format gambar harus jpeg, png, jpg, atau webp.',
-                'proof_images.*.max' => 'Ukuran setiap gambar maksimal 2MB.',
-            ]);
+            // Satu unggahan untuk satu syarat, dan syaratnya diambil dari tabel
+            // - bukan dipatok di sini. Dulu jumlahnya diturunkan dari jumlah akun
+            // Instagram aktif, yang hanya masuk akal selama syaratnya memang
+            // hanya follow. Sekarang syaratnya bisa follow, tag teman, atau
+            // bagikan ke story, dan masing-masing punya slotnya sendiri.
+            $requirements = ProofRequirement::active()->get();
+
+            $rules = [];
+            $messages = [];
+
+            foreach ($requirements as $requirement) {
+                $field = "proofs.{$requirement->id}";
+                $rules[$field] = ['required', 'image', 'mimes:jpeg,png,jpg,webp', 'max:2048'];
+
+                // Pesannya menyebut judul syaratnya, bukan nomor slot. Peserta
+                // yang melewatkan satu unggahan perlu tahu yang mana, dan
+                // "bukti ke-2" tidak menjawab itu.
+                $messages["{$field}.required"] = "Bukti untuk \"{$requirement->title}\" wajib diunggah.";
+                $messages["{$field}.image"] = "Bukti untuk \"{$requirement->title}\" harus berupa gambar.";
+                $messages["{$field}.mimes"] = "Bukti untuk \"{$requirement->title}\" harus berformat jpeg, png, jpg, atau webp.";
+                $messages["{$field}.max"] = "Bukti untuk \"{$requirement->title}\" maksimal 2MB.";
+            }
+
+            // Berkas yang akan dipakai, dari satu sumber saja. Divalidasi dan
+            // disimpan dari variabel yang sama supaya tidak mungkin lolos
+            // validasi lalu ternyata kosong saat disimpan.
+            $uploaded = collect($request->file('proofs', []))->filter()->all();
+
+            // Jalur mundur untuk tab yang masih memuat versi lama antarmuka.
+            // Bentuk lamanya mengirim proof_images[] tanpa keterangan syarat, dan
+            // urutannya satu-satunya petunjuk yang ada - jadi dipetakan berurutan
+            // ke syarat aktif. Tanpa ini, siapa pun yang membuka dialog
+            // pendaftaran sebelum deploy gagal mendaftar dengan pesan yang
+            // menyebut slot yang tidak ada di layarnya.
+            if ($uploaded === []) {
+                $legacyFiles = collect($request->file('proof_images', []))->filter()->values();
+
+                foreach ($requirements->values() as $index => $requirement) {
+                    if ($file = $legacyFiles->get($index)) {
+                        $uploaded[$requirement->id] = $file;
+                    }
+                }
+            }
+
+            $validator = Validator::make(['proofs' => $uploaded], $rules, $messages);
 
             if ($validator->fails()) {
                 return response()->json([
@@ -114,17 +222,36 @@ class UserTryoutController extends Controller
                 ], 422);
             }
 
-            $proofPaths = collect($request->file('proof_images', []))
-                ->map(fn ($file) => $file->store('proof-images', 'public'))
-                ->values()
-                ->all();
+            $proofPaths = [];
+            $proofDetails = [];
 
-            DB::transaction(function () use ($user, $tryout, $proofPaths) {
+            foreach ($requirements as $requirement) {
+                $file = $uploaded[$requirement->id] ?? null;
+
+                if (! $file) {
+                    continue;
+                }
+
+                $path = $file->store('proof-images', 'public');
+                $proofPaths[] = $path;
+
+                // Judulnya ikut disimpan, bukan hanya id-nya. Syarat bisa diubah
+                // atau dihapus admin setelah pendaftaran masuk, dan bukti lama
+                // tetap harus bisa dibaca apa maksudnya saat ditinjau.
+                $proofDetails[] = [
+                    'requirement_id' => $requirement->id,
+                    'title' => $requirement->title,
+                    'path' => $path,
+                ];
+            }
+
+            DB::transaction(function () use ($user, $tryout, $proofPaths, $proofDetails) {
                 UserTryoutAccess::create([
                     'user_id' => $user->id,
                     'tryout_id' => $tryout->id,
                     'proof_image' => $proofPaths[0] ?? null,
                     'proof_images' => $proofPaths,
+                    'proof_details' => $proofDetails,
                     'granted_at' => now(),
                 ]);
             });
@@ -182,7 +309,16 @@ class UserTryoutController extends Controller
     {
         $user = $request->user();
 
+        // Filtered by track, like index() already was. Without this, every
+        // attempt the user has ever made came back on both dashboards: someone
+        // who had only ever sat an SKD tryout saw that score on the UTBK
+        // dashboard, and saw it presented against the UTBK scale of 1000
+        // instead of the 550 an SKD score is out of.
         $tryoutIds = UserTryoutAccess::where('user_id', $user->id)
+            ->whereIn(
+                'tryout_id',
+                Tryout::where('kategori', $user->kategori ?? 'utbk')->select('id')
+            )
             ->pluck('tryout_id');
 
         $sessionsByTryout = TryoutSession::where('user_id', $user->id)
@@ -209,21 +345,40 @@ class UserTryoutController extends Controller
             ->where('is_published', true)
             ->get();
 
-        $finishedSessionsByTryout = TryoutSession::with('answers')
-            ->where('user_id', $user->id)
+        // Jawaban tidak di-eager-load: yang dibutuhkan riwayat percobaan hanya
+        // agregatnya, dan itu dihitung database sekali untuk seluruh sesi.
+        $finishedSessions = TryoutSession::where('user_id', $user->id)
             ->whereIn('tryout_id', $tryoutIds)
             ->where('status', 'finished')
             ->orderByDesc('finished_at')
             ->orderByDesc('created_at')
-            ->get()
-            ->groupBy('tryout_id');
+            ->get();
 
-        $tryouts->each(function ($tryout) use ($user, $sessionsByTryout, $sessionCountsByTryout, $finishedSessionsByTryout) {
+        $finishedSessionsByTryout = $finishedSessions->groupBy('tryout_id');
+        $attemptAggregates = ScoringService::sessionAggregates($finishedSessions->pluck('id'));
+
+        // Jumlah soal per tryout dalam satu kueri berkelompok, bukan satu kueri
+        // COUNT per tryout di dalam loop.
+        $subtestIdsByTryout = $tryouts->mapWithKeys(
+            fn ($tryout) => [$tryout->id => $tryout->tryoutSubtests->pluck('subtest_id')->all()],
+        );
+
+        $questionCountBySubtest = Question::whereIn('subtest_id', $subtestIdsByTryout->flatten()->unique()->values())
+            ->where('is_active', true)
+            ->selectRaw('subtest_id, count(*) as total')
+            ->groupBy('subtest_id')
+            ->pluck('total', 'subtest_id');
+
+        // Penyebut skala 0-1000 sifat tryout, jadi sekali per tryout - bukan
+        // sekali per percobaan seperti sebelumnya.
+        $maxPointsByTryout = $tryouts->mapWithKeys(
+            fn ($tryout) => [$tryout->id => ScoringService::maxScoreForTryout($tryout)],
+        );
+
+        $tryouts->each(function ($tryout) use ($user, $sessionsByTryout, $sessionCountsByTryout, $finishedSessionsByTryout, $attemptAggregates, $subtestIdsByTryout, $questionCountBySubtest, $maxPointsByTryout) {
             $session = $sessionsByTryout->get($tryout->id);
-            $subtestIds = $tryout->tryoutSubtests->pluck('subtest_id');
-            $totalQuestions = Question::whereIn('subtest_id', $subtestIds)
-                ->where('is_active', true)
-                ->count();
+            $totalQuestions = collect($subtestIdsByTryout->get($tryout->id) ?? [])
+                ->sum(fn ($id) => (int) ($questionCountBySubtest[$id] ?? 0));
 
             $tryout->setAttribute('user_is_enrolled', true);
             $tryout->setAttribute('user_attempt_count', (int) ($sessionCountsByTryout->get($tryout->id) ?? 0));
@@ -233,7 +388,13 @@ class UserTryoutController extends Controller
             $tryout->setAttribute(
                 'user_attempts',
                 ($finishedSessionsByTryout->get($tryout->id) ?? collect())
-                    ->map(fn ($attempt) => $this->formatAttemptHistory($tryout, $attempt, $totalQuestions))
+                    ->map(fn ($attempt) => $this->formatAttemptHistory(
+                        $tryout,
+                        $attempt,
+                        $totalQuestions,
+                        $attemptAggregates[(string) $attempt->id] ?? null,
+                        $maxPointsByTryout->get($tryout->id, 0.0),
+                    ))
                     ->values()
             );
 
@@ -267,24 +428,85 @@ class UserTryoutController extends Controller
             ], 403);
         }
 
+        // Sesi yang belum selesai dilanjutkan, bukan diulang: percobaan itu sudah
+        // dibayar dan orang yang kembali di tengah ujian tidak boleh ditagih lagi.
         $session = TryoutSession::where('user_id', $user->id)
             ->where('tryout_id', $tryout->id)
             ->where('status', '!=', 'finished')
             ->latest('created_at')
             ->first();
 
-        if (! $session) {
-            $nextAttemptNumber = ((int) TryoutSession::where('user_id', $user->id)
-                ->where('tryout_id', $tryout->id)
-                ->max('attempt_number')) + 1;
+        $ticketBalanceRemaining = null;
 
-            $session = TryoutSession::create([
-                'user_id' => $user->id,
-                'tryout_id' => $tryout->id,
-                'attempt_number' => $nextAttemptNumber,
-                'started_at' => now(),
-                'status' => 'in_progress',
-            ]);
+        if (! $session) {
+            $charged = DB::transaction(function () use ($user, $tryout, &$session, &$ticketBalanceRemaining) {
+                // Dikunci lebih dulu, bukan hanya saat memotong tiket: kunci
+                // inilah yang membuat dua permintaan start bersamaan tidak bisa
+                // sama-sama membuat percobaan baru dan lolos satu pemotongan.
+                $lockedUser = $user->newQuery()
+                    ->whereKey($user->id)
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $lockedUser) {
+                    return false;
+                }
+
+                // Dibaca setelah kunci didapat, supaya nomornya tidak basi.
+                $existing = TryoutSession::where('user_id', $user->id)
+                    ->where('tryout_id', $tryout->id)
+                    ->where('status', '!=', 'finished')
+                    ->latest('created_at')
+                    ->first();
+
+                if ($existing) {
+                    $session = $existing;
+
+                    return true;
+                }
+
+                $nextAttemptNumber = ((int) TryoutSession::where('user_id', $user->id)
+                    ->where('tryout_id', $tryout->id)
+                    ->max('attempt_number')) + 1;
+
+                // Satu tiket untuk satu kali pengerjaan. Tiket yang dipotong
+                // saat mendaftar hanya membayar percobaan pertama, jadi setiap
+                // pengulangan tryout premium harus membayar lagi - kalau tidak,
+                // satu tiket berlaku untuk percobaan tanpa batas.
+                if ($nextAttemptNumber > 1 && ! $tryout->is_free) {
+                    if ($lockedUser->ticket_balance <= 0) {
+                        return false;
+                    }
+
+                    $lockedUser->decrement('ticket_balance', 1);
+
+                    TicketLog::create([
+                        'user_id'     => $lockedUser->id,
+                        'type'        => 'debit',
+                        'amount'      => 1,
+                        'source'      => 'tryout',
+                        'description' => 'Kerjakan ulang: ' . $tryout->title,
+                    ]);
+
+                    $ticketBalanceRemaining = $lockedUser->fresh()->ticket_balance;
+                }
+
+                $session = TryoutSession::create([
+                    'user_id' => $user->id,
+                    'tryout_id' => $tryout->id,
+                    'attempt_number' => $nextAttemptNumber,
+                    'started_at' => now(),
+                    'status' => 'in_progress',
+                ]);
+
+                return true;
+            });
+
+            if (! $charged) {
+                return response()->json([
+                    'message' => 'Tiket tidak cukup untuk mengulang tryout ini. Satu tiket berlaku untuk satu kali pengerjaan.',
+                ], 403);
+            }
         }
 
         if ($session->status === 'not_started') {
@@ -296,8 +518,11 @@ class UserTryoutController extends Controller
         }
 
         return response()->json([
-            'message' => 'Tryout dimulai',
+            'message' => $session->attempt_number > 1 && ! $tryout->is_free
+                ? 'Tryout dimulai. 1 Tiket telah digunakan.'
+                : 'Tryout dimulai',
             'data' => $session,
+            'ticket_balance_remaining' => $ticketBalanceRemaining,
         ]);
     }
 
@@ -664,7 +889,13 @@ class UserTryoutController extends Controller
         // bobot per opsi (TKP CPNS) ikut terhitung. Untuk subtes 1/0 hasilnya sama.
         $rawPoints = ScoringService::rawScoreForSession($session);
         $maxPoints = ScoringService::maxScoreForSession($session);
-        $simpleFinalScore = $maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0;
+        $isCpns = $tryout->kategori === 'cpns';
+        $simpleFinalScore = $isCpns ? $rawPoints : ($maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0);
+        $simpleMaxScore = $isCpns ? $maxPoints : 1000;
+        $isFullSkd = ScoringService::isFullSkd($tryout);
+        $skdStatus = $isFullSkd
+            ? ScoringService::calculateSkdPassingStatus($session)
+            : null;
 
         $baseData = [
             'tryout_id' => $tryout->id,
@@ -674,6 +905,11 @@ class UserTryoutController extends Controller
             'status' => $session->status,
             'started_at' => $session->started_at,
             'finished_at' => $session->finished_at,
+            'is_full_skd' => $isFullSkd,
+            'is_passed_skd' => $skdStatus['is_passed_skd'] ?? null,
+            'skd_scores' => $skdStatus['scores'] ?? null,
+            'skd_passing_grades' => $skdStatus['passing_grades'] ?? null,
+            'skd_subtests' => $skdStatus['subtests'] ?? null,
             'summary' => [
                 'total_questions' => $totalQuestions,
                 'answered' => $answered,
@@ -686,6 +922,7 @@ class UserTryoutController extends Controller
                 'is_ready' => ! $tryout->use_irt,
                 'raw_score' => ! $tryout->use_irt ? round($rawPoints, 2) : 0,
                 'final_score' => ! $tryout->use_irt ? round($simpleFinalScore, 2) : 0,
+                'max_score' => ! $tryout->use_irt ? round($simpleMaxScore, 2) : 1000,
                 'accuracy' => round($accuracy, 2),
             ],
             // Rincian per subtest: peserta CPNS dinilai per ambang, dan satu
@@ -707,36 +944,17 @@ class UserTryoutController extends Controller
 
         $rawIrtScore = 0;
         $finalScore1000 = 0;
-        $totalParticipants = TryoutSession::where('tryout_id', $tryout->id)
-            ->where('attempt_number', 1)
-            ->where('status', 'finished')
-            ->count();
+
+        // Bobot IRT adalah sifat tryout, bukan sifat peserta, jadi dihitung satu
+        // kali di ScoringService dan dipakai bersama papan peringkat. Kalau
+        // keduanya menghitung sendiri, satu sesi yang sama bisa bernilai lain di
+        // halaman hasil dan di papan peringkat.
+        $irt = ScoringService::irtWeights($tryout, $subtestIds);
+        $totalParticipants = $irt['participants'];
 
         if ($isIrtReady && $totalParticipants > 0) {
-            $allTryoutQuestions = Question::whereIn('subtest_id', $subtestIds)
-                ->where('is_active', true)
-                ->get();
-
-            $totalWeightAll = 0;
-            $questionStats = [];
-
-            foreach ($allTryoutQuestions as $q) {
-                $correctCount = UserAnswer::where('question_id', $q->id)
-                    ->where('is_correct', true)
-                    ->whereHas('tryoutSession', function ($query) use ($tryout) {
-                        $query->where('tryout_id', $tryout->id)
-                            ->where('attempt_number', 1)
-                            ->where('status', 'finished');
-                    })
-                    ->count();
-
-                $p = $correctCount / $totalParticipants;
-                $safeP = $p <= 0 ? 0.0001 : ($p >= 1 ? 0.9999 : $p);
-                $weight = max(1, log((1 - $safeP) / $safeP) + 2);
-
-                $questionStats[$q->id] = $weight;
-                $totalWeightAll += $weight;
-            }
+            $questionStats = $irt['weights'];
+            $totalWeightAll = $irt['total'];
 
             foreach ($session->answers as $answer) {
                 if ($answer->is_correct && isset($questionStats[$answer->question_id])) {
@@ -747,23 +965,44 @@ class UserTryoutController extends Controller
             $finalScore1000 = ($totalWeightAll > 0) ? ($rawIrtScore / $totalWeightAll) * 1000 : 0;
         }
 
+        // Skor sementara selama IRT belum final: proporsi jawaban benar terhadap
+        // skor maksimum, diskalakan ke 1000 - rumus yang sama dengan tryout
+        // non-IRT.
+        //
+        // Sengaja bukan angka IRT yang dihitung lebih awal. Bobot IRT berasal
+        // dari seberapa banyak peserta lain menjawab benar, jadi saat pesertanya
+        // masih segelintir bobotnya liar: satu-satunya peserta akan melihat tiap
+        // soal yang ia salah dihargai sebelas kali lipat soal yang ia benar, dan
+        // angkanya bisa melompat drastis begitu peserta lain masuk. Proporsi
+        // jawaban benar tidak bergantung siapa pun, jadi tidak akan menyesatkan.
+        $provisionalScore = round($simpleFinalScore, 2);
+
         $baseData['irt_result'] = [
             'is_ready' => $isIrtReady,
             'release_date' => $tryout->end_date,
             'total_participants_calculated' => $isIrtReady ? $totalParticipants : 0,
             'raw_score' => $isIrtReady ? round($rawIrtScore, 2) : 0,
             'final_score' => $isIrtReady ? round($finalScore1000, 2) : 0,
+            'max_score' => 1000,
+            'provisional_score' => $provisionalScore,
         ];
         $baseData['score_result'] = [
-            'method' => 'irt',
+            'method' => $isIrtReady ? 'irt' : 'simple',
             'is_ready' => $isIrtReady,
-            'raw_score' => $isIrtReady ? round($rawIrtScore, 2) : 0,
-            'final_score' => $isIrtReady ? round($finalScore1000, 2) : 0,
+            // Selama IRT belum final, yang dilaporkan adalah skor sementara -
+            // bukan nol, yang dulu membuat halaman hasil seolah tidak punya
+            // angka sama sekali.
+            'is_provisional' => ! $isIrtReady,
+            'raw_score' => $isIrtReady ? round($rawIrtScore, 2) : round($rawPoints, 2),
+            'final_score' => $isIrtReady ? round($finalScore1000, 2) : $provisionalScore,
+            'max_score' => $isIrtReady ? 1000 : round($simpleMaxScore, 2),
             'accuracy' => round($accuracy, 2),
         ];
 
         return response()->json([
-            'message' => !$isIrtReady ? 'Hasil IRT sedang dalam proses dan akan keluar setelah periode tryout berakhir.' : 'Sukses mengambil data IRT',
+            'message' => !$isIrtReady
+                ? 'Skor sementara ditampilkan. Skor IRT final keluar setelah periode tryout berakhir.'
+                : 'Sukses mengambil data IRT',
             'data' => $baseData,
         ]);
     }
@@ -781,27 +1020,27 @@ class UserTryoutController extends Controller
             $level = RankingService::LEVEL_NATIONAL;
         }
 
-        // BRD: hasil & ranking IRT baru terbit setelah periode/cohort ditutup.
-        if (! RankingService::isPublishable($tryout)) {
-            return response()->json([
-                'message' => 'Ranking IRT belum tersedia. Menunggu finalisasi periode tryout.',
-                'data' => [
-                    'level' => $level,
-                    'is_ready' => false,
-                    'release_date' => $tryout->end_date,
-                    'leaderboard' => [],
-                ],
-            ]);
-        }
+        // Peringkat tidak lagi ditahan sampai periode tryout ditutup. Menahannya
+        // membuat papan peringkat kosong tepat pada saat orang paling ingin
+        // melihatnya - sesaat setelah selesai mengerjakan. Yang ditahan hanya
+        // status "final"-nya: untuk tryout IRT, bobot tiap soal masih bergeser
+        // selama peserta lain terus masuk, jadi peringkatnya sementara.
+        $isFinal = RankingService::isPublishable($tryout);
 
         $subtestIds = TryoutSubtest::where('tryout_id', $tryout->id)->pluck('subtest_id');
         $totalQuestions = Question::whereIn('subtest_id', $subtestIds)
             ->where('is_active', true)
             ->count();
 
-        $sessionQuery = TryoutSession::with(['user', 'answers'])
+        // Semua percobaan yang selesai ikut dihitung; yang dipakai untuk peringkat
+        // nanti hanya percobaan terbaik tiap peserta.
+        // Jawaban sengaja tidak di-eager-load. Angka yang dibutuhkan papan
+        // peringkat - terjawab, benar, salah, skor mentah - dihitung database
+        // dalam satu kueri berkelompok; memuat tiap jawaban sebagai model
+        // Eloquent hanya untuk dihitung berarti menghidrasi puluhan ribu objek
+        // dan itulah, bukan kuerinya, yang memakan waktu.
+        $sessionQuery = TryoutSession::with('user')
             ->where('tryout_id', $tryout->id)
-            ->where('attempt_number', 1)
             ->where('status', 'finished');
 
         // Filter cakupan sesuai level yang diminta
@@ -830,47 +1069,58 @@ class UserTryoutController extends Controller
         $questionWeights = [];
         $totalWeightAll = 0;
 
-        if ($tryout->use_irt && $sessions->isNotEmpty()) {
-            $allTryoutQuestions = Question::whereIn('subtest_id', $subtestIds)
-                ->where('is_active', true)
-                ->get();
-
-            foreach ($allTryoutQuestions as $question) {
-                $correctCount = UserAnswer::where('question_id', $question->id)
-                    ->where('is_correct', true)
-                    ->whereHas('tryoutSession', function ($query) use ($tryout) {
-                        $query->where('tryout_id', $tryout->id)
-                            ->where('attempt_number', 1)
-                            ->where('status', 'finished');
-                    })
-                    ->count();
-
-                $p = $correctCount / $sessions->count();
-                $safeP = $p <= 0 ? 0.0001 : ($p >= 1 ? 0.9999 : $p);
-                $weight = max(1, log((1 - $safeP) / $safeP) + 2);
-
-                $questionWeights[$question->id] = $weight;
-                $totalWeightAll += $weight;
-            }
+        // Tingkat kesulitan soal adalah sifat soal terhadap seluruh peserta, bukan
+        // terhadap satu provinsi atau satu sekolah. Penyebutnya dihitung dari
+        // populasi yang sama dengan pembilangnya - sebelumnya pembilang memakai
+        // seluruh peserta sementara penyebutnya memakai peserta yang lolos filter
+        // level, sehingga p bisa melebihi 1 pada papan peringkat region/sekolah.
+        //
+        // Perhitungannya satu tempat dengan halaman hasil, di ScoringService.
+        if ($tryout->use_irt) {
+            $irt = ScoringService::irtWeights($tryout, $subtestIds);
+            $questionWeights = $irt['weights'];
+            $totalWeightAll = $irt['total'];
         }
 
+        // Semuanya dihitung sekali untuk seluruh sesi, bukan sekali per sesi.
+        $sessionIds = $sessions->pluck('id');
+        $aggregates = ScoringService::sessionAggregates($sessionIds);
+
+        // Penyebut skala 0-1000 adalah sifat tryout, sama untuk semua pesertanya,
+        // jadi cukup dihitung sekali di luar loop.
+        $maxPointsTryout = $tryout->use_irt ? 0.0 : ScoringService::maxScoreForTryout($tryout);
+
+        $irtRawScores = $totalWeightAll > 0
+            ? ScoringService::irtRawScores($sessionIds, $questionWeights)
+            : [];
+
+        $isFullSkd = ScoringService::isFullSkd($tryout);
+        $skdStatuses = $isFullSkd
+            ? ScoringService::skdPassingStatuses($tryout, $sessionIds)
+            : [];
+
         $leaderboard = $sessions
-            ->map(function ($session) use ($totalQuestions, $tryout, $questionWeights, $totalWeightAll, $includeProofImages, $proofsByUser) {
-                $answered = $session->answers->whereNotNull('answer')->count();
-                $correct = $session->answers->where('is_correct', true)->count();
-                $wrong = $session->answers->where('is_correct', false)->count();
+            ->map(function ($session) use ($totalQuestions, $tryout, $totalWeightAll, $includeProofImages, $proofsByUser, $aggregates, $irtRawScores, $maxPointsTryout, $isFullSkd, $skdStatuses) {
+                $agg = $aggregates[(string) $session->id] ?? [
+                    'answered' => 0, 'correct' => 0, 'wrong' => 0, 'raw_score' => 0.0,
+                ];
+
+                $answered = $agg['answered'];
+                $correct = $agg['correct'];
+                $wrong = $agg['wrong'];
                 $unanswered = max($totalQuestions - $answered, 0);
                 $accuracy = $totalQuestions > 0 ? ($correct / $totalQuestions) * 100 : 0;
 
                 if ($tryout->use_irt && $totalWeightAll > 0) {
-                    $rawScore = $session->answers
-                        ->where('is_correct', true)
-                        ->sum(fn ($answer) => $questionWeights[$answer->question_id] ?? 0);
+                    $rawScore = $irtRawScores[(string) $session->id] ?? 0.0;
                     $finalScore = ($rawScore / $totalWeightAll) * 1000;
+                    $maxScore = 1000;
                 } else {
-                    $rawScore = ScoringService::rawScoreForSession($session);
-                    $maxPoints = ScoringService::maxScoreForSession($session);
-                    $finalScore = $maxPoints > 0 ? ($rawScore / $maxPoints) * 1000 : 0;
+                    $rawScore = $agg['raw_score'];
+                    $maxPoints = $maxPointsTryout;
+                    $isCpns = $tryout->kategori === 'cpns';
+                    $finalScore = $isCpns ? $rawScore : ($maxPoints > 0 ? ($rawScore / $maxPoints) * 1000 : 0);
+                    $maxScore = $isCpns ? $maxPoints : 1000;
                 }
 
                 $row = [
@@ -890,6 +1140,7 @@ class UserTryoutController extends Controller
                     'score' => [
                         'raw_score' => round($rawScore, 2),
                         'final_score' => round($finalScore, 2),
+                        'max_score' => round($maxScore, 2),
                     ],
                     'school_id' => $session->user?->school_id,
                     'school_name' => $session->user?->school_name,
@@ -909,19 +1160,17 @@ class UserTryoutController extends Controller
                         ->all();
                 }
 
-                return $row;
-            })
-            ->sortBy([
-                ['score.final_score', 'desc'],
-                ['summary.correct', 'desc'],
-                ['finished_at', 'asc'],
-            ])
-            ->values()
-            ->map(function ($row, $index) {
-                $row['rank'] = $index + 1;
+                if ($isFullSkd) {
+                    $status = $skdStatuses[(string) $session->id];
+                    $row['is_passed'] = $status['is_passed_skd'];
+                    $row['twk_score'] = $status['scores']['twk'];
+                    $row['tiu_score'] = $status['scores']['tiu'];
+                    $row['tkp_score'] = $status['scores']['tkp'];
+                }
 
                 return $row;
-            });
+            })
+            ->pipe(fn ($rows) => RankingService::rankBestAttempts($rows, $isFullSkd));
 
         // Posisi peserta yang sedang melihat, pada level yang diminta
         $myRank = null;
@@ -943,15 +1192,20 @@ class UserTryoutController extends Controller
                 'tryout_id' => $tryout->id,
                 'tryout_title' => $tryout->title,
                 'use_irt' => $tryout->use_irt,
+                'is_full_skd' => $isFullSkd,
                 'level' => $level,
                 'is_ready' => true,
+                // Peringkat sudah bisa dilihat sekarang; is_final menyatakan
+                // apakah angkanya masih bisa bergeser.
+                'is_final' => $isFinal,
+                'release_date' => $tryout->end_date,
                 'scope' => [
                     'region_province' => $request->query('region_province') ?? $viewer?->region_province,
                     'school_id' => $request->query('school_id') ?? $viewer?->school_id,
                 ],
                 'my_rank' => $myRank,
                 'total_participants' => $leaderboard->count(),
-                'leaderboard_basis' => 'attempt_number_1',
+                'leaderboard_basis' => 'best_attempt',
                 'leaderboard' => $leaderboard,
             ],
         ]);
@@ -1088,15 +1342,35 @@ class UserTryoutController extends Controller
         ]);
     }
 
-    private function formatAttemptHistory(Tryout $tryout, TryoutSession $session, int $totalQuestions): array
-    {
-        $correct = $session->answers->where('is_correct', true)->count();
-        $answered = $session->answers->whereNotNull('answer')->count();
-        $wrong = $session->answers->where('is_correct', false)->count();
+    /**
+     * Satu baris riwayat percobaan.
+     *
+     * Agregat dan penyebut diterima dari pemanggil, bukan dihitung di sini.
+     * Sebelumnya metode ini menghitung sendiri - satu kueri jumlah skor dan
+     * beberapa kueri penyebut per percobaan - padahal pemanggilnya mengulangnya
+     * untuk setiap percobaan di setiap tryout, dan penyebutnya sama untuk semua
+     * percobaan pada tryout yang sama.
+     *
+     * @param  array{answered: int, correct: int, wrong: int, raw_score: float}|null  $aggregate
+     */
+    private function formatAttemptHistory(
+        Tryout $tryout,
+        TryoutSession $session,
+        int $totalQuestions,
+        ?array $aggregate = null,
+        ?float $maxPointsGiven = null,
+    ): array {
+        $aggregate ??= ScoringService::sessionAggregates([$session->id])[(string) $session->id]
+            ?? ['answered' => 0, 'correct' => 0, 'wrong' => 0, 'raw_score' => 0.0];
+
+        $correct = $aggregate['correct'];
+        $answered = $aggregate['answered'];
+        $wrong = $aggregate['wrong'];
         $accuracy = $totalQuestions > 0 ? ($correct / $totalQuestions) * 100 : 0;
-        $rawPoints = ScoringService::rawScoreForSession($session);
-        $maxPoints = ScoringService::maxScoreForSession($session);
-        $finalScore = $maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0;
+        $rawPoints = $aggregate['raw_score'];
+        $maxPoints = $maxPointsGiven ?? ScoringService::maxScoreForSession($session);
+        $isCpns = $tryout->kategori === 'cpns';
+        $finalScore = $isCpns ? $rawPoints : ($maxPoints > 0 ? ($rawPoints / $maxPoints) * 1000 : 0);
 
         return [
             'session_id' => $session->id,
@@ -1108,6 +1382,7 @@ class UserTryoutController extends Controller
             'score' => [
                 'raw_score' => round($rawPoints, 2),
                 'final_score' => round($finalScore, 2),
+                'max_score' => round($isCpns ? $maxPoints : 1000, 2),
                 'accuracy' => round($accuracy, 2),
             ],
             'summary' => [

@@ -10,6 +10,20 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
+/**
+ * Packages are sold to everyone, so nothing here takes a kategori.
+ *
+ * The catalogue stopped filtering by track (see PackageCatalogController): a
+ * ticket is one balance and works on either track, so a package tagged "cpns"
+ * would still have been sold to UTBK users. Keeping a Jalur field on the form
+ * would promise targeting that no longer exists. Requests that still send
+ * kategori are ignored rather than rejected - validate() drops keys it has no
+ * rule for - so an older admin build keeps working.
+ *
+ * The packages.kategori column is left in place: existing rows carry values
+ * that admins may still want for reporting, and dropping data is not something
+ * this change needs to do.
+ */
 class AdminPackageController extends Controller
 {
     public function index(): JsonResponse
@@ -25,7 +39,6 @@ class AdminPackageController extends Controller
     {
         $validated = $request->validate([
             'name'           => ['required', 'string', 'max:255'],
-            'kategori'       => ['nullable', 'in:utbk,cpns'],
             'slug'           => ['nullable', 'string', 'max:255', 'unique:packages,slug'],
             'description'    => ['nullable', 'string'],
             'thumbnail'      => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
@@ -71,7 +84,6 @@ class AdminPackageController extends Controller
     {
         $validated = $request->validate([
             'name'           => ['required', 'string', 'max:255'],
-            'kategori'       => ['nullable', 'in:utbk,cpns'],
             'slug'           => ['nullable', 'string', 'max:255', 'unique:packages,slug,' . $package->id],
             'description'    => ['nullable', 'string'],
             'thumbnail'      => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],

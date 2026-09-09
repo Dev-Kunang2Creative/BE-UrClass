@@ -37,10 +37,19 @@ class Tryout extends Model
 
     public function getImageUrlAttribute()
     {
-        if ($this->image) {
-            return url('storage/' . $this->image);
+        if (! $this->image) {
+            return null;
         }
-        return null;
+
+        if (filter_var($this->image, FILTER_VALIDATE_URL)) {
+            return $this->image;
+        }
+
+        if (str_starts_with($this->image, '/') || str_starts_with($this->image, 'images/')) {
+            return $this->image;
+        }
+
+        return url('storage/' . $this->image);
     }
 
     protected $appends = ['image_url'];

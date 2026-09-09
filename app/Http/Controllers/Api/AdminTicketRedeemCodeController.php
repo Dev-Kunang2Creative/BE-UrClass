@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\TicketRedeemCode;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 class AdminTicketRedeemCodeController extends Controller
@@ -33,7 +34,7 @@ class AdminTicketRedeemCodeController extends Controller
             'quota' => $validated['quota'],
             'used_count' => 0,
             'is_active' => $validated['is_active'] ?? true,
-            'expired_at' => $validated['expired_at'] ?? null,
+            'expired_at' => self::resolveExpiry($validated['expired_at'] ?? null),
             'created_by' => $request->user()->id,
         ]);
 
@@ -58,13 +59,32 @@ class AdminTicketRedeemCodeController extends Controller
             'ticket_amount' => $validated['ticket_amount'],
             'quota' => $validated['quota'],
             'is_active' => $validated['is_active'],
-            'expired_at' => $validated['expired_at'] ?? null,
+            'expired_at' => self::resolveExpiry($validated['expired_at'] ?? null),
         ]);
 
         return response()->json([
             'message' => 'Kode redeem tiket berhasil diupdate',
             'data' => $ticketRedeemCode->fresh()->loadCount('redemptions'),
         ]);
+    }
+
+    /**
+     * Tanggal kedaluwarsa berarti "berlaku sampai habis hari itu".
+     *
+     * Form admin mengirim tanggal saja, dan tanggal polos tersimpan sebagai
+     * pukul 00:00 - sehingga kode yang disetel kedaluwarsa hari ini sudah mati
+     * sejak tengah malam, berjam-jam sebelum siapa pun sempat memakainya.
+     * Waktu yang dikirim lengkap tetap dipakai apa adanya.
+     */
+    private static function resolveExpiry(?string $value): ?Carbon
+    {
+        if (! $value) {
+            return null;
+        }
+
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', trim($value))
+            ? Carbon::parse($value)->endOfDay()
+            : Carbon::parse($value);
     }
 
     public function destroy(TicketRedeemCode $ticketRedeemCode): JsonResponse
