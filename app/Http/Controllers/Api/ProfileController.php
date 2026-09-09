@@ -42,8 +42,8 @@ class ProfileController extends Controller
         $targetRequired = $isAdmin || ! $isUtbk ? 'nullable' : 'required';
 
         // Peserta CPNS punya dua bentuk target, dan yang wajib diisi tergantung
-        // sub-jalur yang ia pilih: pelamar sekolah kedinasan mengisi sekolah dan
-        // program studi, pelamar CPNS umum mengisi instansi dan formasi. Meminta
+        // sub-jalur yang ia pilih: pelamar sekolah kedinasan mengisi sekolah,
+        // pelamar CPNS umum mengisi instansi dan formasi. Meminta
         // keduanya berarti meminta salah satu diisi asal-asalan.
         $cpnsType = $request->input('cpns_target_type');
         $kedinasanRequired = ! $isAdmin && $isCpns && $cpnsType === 'kedinasan'
@@ -83,7 +83,7 @@ class ProfileController extends Controller
             // (CPNS): keduanya berbentuk sekolah plus program studi, jadi tidak
             // ada gunanya membuat pasangan kolom kedua yang isinya sejenis.
             'target_university_1' => [$isCpns ? $kedinasanRequired : $targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
-            'target_major_1' => [$isCpns ? $kedinasanRequired : $targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'target_major_1' => [$isCpns ? 'nullable' : $targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'target_university_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'target_major_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
 

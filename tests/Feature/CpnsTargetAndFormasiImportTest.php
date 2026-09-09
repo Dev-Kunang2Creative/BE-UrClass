@@ -70,6 +70,21 @@ class CpnsTargetAndFormasiImportTest extends TestCase
         $this->assertSame(0, $bocor->json('total'));
     }
 
+    public function test_kedinasan_hanya_mewajibkan_target_sekolah_tanpa_jurusan(): void
+    {
+        $data = [
+            'name' => 'Peserta Kedinasan', 'phone_number' => '081234567890',
+            'birth_date' => '2000-01-01', 'gender' => 'L', 'school_origin' => 'SMA 1',
+            'grade_level' => 'Gap Year', 'cpns_target_type' => 'kedinasan',
+            'target_university_1' => 'Institut Pemerintahan Dalam Negeri',
+            'target_major_1' => null, 'target_major_2' => null,
+        ];
+        $this->actingAs($this->pelamar)->putJson('/api/profile/update', $data)->assertOk();
+        unset($data['target_university_1']);
+        $this->putJson('/api/profile/update', $data)->assertUnprocessable()
+            ->assertJsonValidationErrors('target_university_1');
+    }
+
     public function test_status_formasi_tertutup_selama_belum_ada_formasi(): void
     {
         $response = $this->actingAs($this->pelamar)->getJson('/api/formasi/status');

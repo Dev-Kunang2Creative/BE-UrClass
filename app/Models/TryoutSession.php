@@ -14,6 +14,7 @@ class TryoutSession extends Model
         'tryout_id',
         'attempt_number',
         'started_at',
+        'batas_waktu',
         'finished_at',
         'status',
         'total_score',
@@ -24,6 +25,7 @@ class TryoutSession extends Model
 
     protected $casts = [
         'started_at' => 'datetime',
+        'batas_waktu' => 'datetime',
         'finished_at' => 'datetime',
         'total_score' => 'decimal:2',
         'raw_score' => 'decimal:2',
@@ -33,6 +35,18 @@ class TryoutSession extends Model
     public function user()
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function batasWaktuCpns(Tryout $tryout): \Illuminate\Support\Carbon
+    {
+        if (! $this->batas_waktu) {
+            $durasi = $tryout->tryoutSubtests()->where('is_active', true)->sum('duration_minutes');
+            $batas = ($this->started_at ?? now())->copy()->addMinutes((int) $durasi);
+            static::whereKey($this->id)->whereNull('batas_waktu')->update(['batas_waktu' => $batas]);
+            $this->refresh();
+        }
+
+        return $this->batas_waktu;
     }
 
     public function tryout()
