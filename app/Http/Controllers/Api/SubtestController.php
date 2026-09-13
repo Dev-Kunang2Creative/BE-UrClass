@@ -8,7 +8,14 @@ use App\Services\AuditLogger;
 use App\Services\ScoringService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Mccarlosen\LaravelMpdf\Facades\LaravelMpdf as PDF;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
+use PhpOffice\PhpSpreadsheet\Style\Fill;
+use PhpOffice\PhpSpreadsheet\Style\Alignment;
 
 class SubtestController extends Controller
 {
@@ -159,5 +166,124 @@ class SubtestController extends Controller
         return response()->json([
             'data' => $subtest,
         ]);
+    }
+
+    public function exportPdf(Subtest $subtest)
+    {
+        $subtest->load(['questions' => function ($q) {
+            $q->where('is_active', true)->orderBy('order_no');
+        }, 'questions.options']);
+
+        $questions = $subtest->questions;
+
+        foreach ($questions as $q) {
+            if ($q->question_image && Storage::disk('public')->exists($q->question_image)) {
+                $raw = Storage::disk('public')->get($q->question_image);
+                $mime = Storage::disk('public')->mimeType($q->question_image) ?: 'image/jpeg';
+                $q->question_image_base64 = 'data:' . $mime . ';base64,' . base64_encode($raw);
+            }
+        }
+
+        $logoPath = public_path('images/logo/urclass.png');
+        $logoBase64 = file_exists($logoPath) ? 'data:image/png;base64,' . base64_encode(file_get_contents($logoPath)) : null;
+
+        $pdf = PDF::loadView('pdf.subtest', [
+            'subtest'    => $subtest,
+            'questions'  => $questions,
+            'logoBase64' => $logoBase64,
+        ], [], [
+            'title'                => 'Naskah Soal ' . $subtest->name,
+            'margin_top'           => 26,
+            'margin_bottom'        => 22,
+            'margin_left'          => 16,
+            'margin_right'         => 16,
+            'margin_header'        => 12,
+            'margin_footer'        => 12,
+            'show_watermark_image' => false,
+            'show_watermark'       => false,
+        ]);
+
+        $filename = 'Naskah_Soal_' . Str::slug($subtest->name) . '.pdf';
+
+        return response($pdf->output(), 200, [
+            'Content-Type'        => 'application/pdf',
+            'Content-Disposition' => "inline; filename=\"{$filename}\"",
+            'Cache-Control'       => 'no-cache, no-store, must-revalidate',
+        ]);
+    }
+
+    public function exportExcel(Subtest $subtest): \Symfony\Component\HttpFoundation\StreamedResponse
+    {
+        $subtest->load(['questions' => function ($q) {
+            $q->where('is_active', true)->orderBy('order_no');
+        }, 'questions.options']);
+
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setTitle('Lembar Soal');
+
+        $headers = ['No', 'Pertanyaan / Soal', 'Opsi A', 'Opsi B', 'Opsi C', 'Opsi D', 'Opsi E'];
+        $sheet->fromArray($headers, null, 'A1');
+
+        $sheet->getStyle('A1:G1')->applyFromArray([
+            'font' => [
+                'bold'  => true,
+                'color' => ['argb' => 'FFFFFFFF'],
+            ],
+            'fill' => [
+                'fillType'   => Fill::FILL_SOLID,
+                'startColor' => ['argb' => 'FF004AAB'],
+            ],
+            'alignment' => [
+                'vertical'   => Alignment::VERTICAL_CENTER,
+                'horizontal' => Alignment::HORIZONTAL_CENTER,
+            ],
+        ]);
+        $sheet->getRowDimension(1)->setRowHeight(26);
+
+        $rowNum = 2;
+        foreach ($subtest->questions as $index => $q) {
+            $optionsMap = [];
+            foreach ($q->options as $opt) {
+                $optionsMap[strtoupper($opt->option_key)] = trim(strip_tags(html_entity_decode($opt->option_text ?? '', ENT_QUOTES, 'UTF-8')));
+            }
+
+            $cleanQuestionText = trim(strip_tags(html_entity_decode($q->question_text ?? '', ENT_QUOTES, 'UTF-8')));
+
+            $sheet->setCellValue('A' . $rowNum, $index + 1);
+            $sheet->setCellValue('B' . $rowNum, $cleanQuestionText);
+            $sheet->setCellValue('C' . $rowNum, $optionsMap['A'] ?? '');
+            $sheet->setCellValue('D' . $rowNum, $optionsMap['B'] ?? '');
+            $sheet->setCellValue('E' . $rowNum, $optionsMap['C'] ?? '');
+            $sheet->setCellValue('F' . $rowNum, $optionsMap['D'] ?? '');
+            $sheet->setCellValue('G' . $rowNum, $optionsMap['E'] ?? '');
+
+            $sheet->getStyle('A' . $rowNum)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+            $sheet->getStyle('B' . $rowNum . ':G' . $rowNum)->getAlignment()->setWrapText(true);
+            $sheet->getStyle('A' . $rowNum . ':G' . $rowNum)->getAlignment()->setVertical(Alignment::VERTICAL_TOP);
+
+            $rowNum++;
+        }
+
+        $sheet->getColumnDimension('A')->setWidth(6);
+        $sheet->getColumnDimension('B')->setWidth(50);
+        $sheet->getColumnDimension('C')->setWidth(26);
+        $sheet->getColumnDimension('D')->setWidth(26);
+        $sheet->getColumnDimension('E')->setWidth(26);
+        $sheet->getColumnDimension('F')->setWidth(26);
+        $sheet->getColumnDimension('G')->setWidth(26);
+
+        $writer = new Xlsx($spreadsheet);
+        $filename = sprintf('soal-%s-%s.xlsx', Str::slug($subtest->name), now()->format('Y-m-d'));
+
+        return response()->stream(
+            fn() => $writer->save('php://output'),
+            200,
+            [
+                'Content-Type'        => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                'Content-Disposition' => "attachment; filename=\"{$filename}\"",
+                'Cache-Control'       => 'no-cache, no-store, must-revalidate',
+            ]
+        );
     }
 }

@@ -182,6 +182,8 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::delete('/subtest-categories/{subtestCategory}', [SubtestCategoryController::class, 'destroy']);
 
         Route::apiResource('subtests', SubtestController::class)->except(['index']);
+        Route::get('/subtests/{subtest}/export-pdf', [SubtestController::class, 'exportPdf']);
+        Route::get('/subtests/{subtest}/export-excel', [SubtestController::class, 'exportExcel']);
         Route::apiResource('subtests.questions', QuestionController::class);
         Route::post('/subtests/{subtest}/questions/bulk-import', [BulkImportQuestionController::class, 'store']);
         Route::get('/questions/bulk-import/excel-template', [BulkImportQuestionController::class, 'excelTemplate']);
