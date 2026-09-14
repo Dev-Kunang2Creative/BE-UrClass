@@ -113,6 +113,13 @@ class BulkImportQuestionController extends Controller
         $questionImagesByRow = [];
         $discussionImagesByRow = [];
 
+        // Gambar opsi menumpang di sel Opsi A-E itu sendiri (C-G), bukan di
+        // kolom tersendiri: satu sel boleh memuat teks sekaligus gambar, jadi
+        // penulis soal menempelkan gambarnya tepat di atas jawaban yang
+        // bersangkutan alih-alih menghitung kolom.
+        $optionColumns = ['C' => 'A', 'D' => 'B', 'E' => 'C', 'F' => 'D', 'G' => 'E'];
+        $optionImagesByRow = [];
+
         foreach ($sheet->getDrawingCollection() as $drawing) {
             $coords = $drawing->getCoordinates();
             if (preg_match('/^([A-Z]+)(\d+)$/i', $coords, $m)) {
@@ -123,6 +130,8 @@ class BulkImportQuestionController extends Controller
                     $questionImagesByRow[$row] = $drawing;
                 } elseif ($col === $discussionImageColLetter || ($hasDiscussionImageCol && $col === 'J')) {
                     $discussionImagesByRow[$row] = $drawing;
+                } elseif (isset($optionColumns[$col])) {
+                    $optionImagesByRow[$row][$optionColumns[$col]] = $drawing;
                 }
             }
         }
@@ -175,14 +184,24 @@ class BulkImportQuestionController extends Controller
             }
 
             if ($questionType === 'multiple_choice') {
-                if (
-                    trim(strip_tags($answerA)) === '' ||
-                    trim(strip_tags($answerB)) === '' ||
-                    trim(strip_tags($answerC)) === '' ||
-                    trim(strip_tags($answerD)) === '' ||
-                    trim(strip_tags($answerE)) === ''
-                ) {
-                    $rowErrors[] = 'Semua jawaban A-E harus diisi untuk soal pilihan ganda.';
+                // Opsi bergambar tanpa teks tetap terhitung terisi: isinya ada,
+                // hanya saja bukan teks. Tanpa ini soal yang jawabannya berupa
+                // bangun ruang atau grafik harus diberi teks basa-basi supaya
+                // barisnya tidak ditolak.
+                $adaIsi = function (string $teks, string $key) use ($optionImagesByRow, $rowNum): bool {
+                    return trim(strip_tags($teks)) !== '' || isset($optionImagesByRow[$rowNum][$key]);
+                };
+
+                $kosong = [];
+                foreach (['A' => $answerA, 'B' => $answerB, 'C' => $answerC, 'D' => $answerD, 'E' => $answerE] as $key => $teks) {
+                    if (! $adaIsi($teks, $key)) {
+                        $kosong[] = $key;
+                    }
+                }
+
+                if ($kosong !== []) {
+                    $rowErrors[] = 'Jawaban ' . implode(', ', $kosong)
+                        . ' belum diisi - setiap opsi harus punya teks atau gambar.';
                 }
 
                 if ($weighted) {
@@ -221,8 +240,16 @@ class BulkImportQuestionController extends Controller
                 $discussionImagePath = $this->extractAndStoreImage($discussionImagesByRow[$rowNum], $lineNo, $errors, 'discussion-images');
             }
 
+            $optionImagePaths = [];
+            foreach ($optionImagesByRow[$rowNum] ?? [] as $key => $drawing) {
+                $jalur = $this->extractAndStoreImage($drawing, $lineNo, $errors, 'option-images');
+                if ($jalur !== null) {
+                    $optionImagePaths[$key] = $jalur;
+                }
+            }
+
             $orderNo = $startNo + $imported;
-            DB::transaction(function () use ($subtest, $questionText, $answerA, $answerB, $answerC, $answerD, $answerE, $discussion, $discussionImagePath, $correctAnswer, $questionType, $imagePath, $orderNo, $optionScores) {
+            DB::transaction(function () use ($subtest, $questionText, $answerA, $answerB, $answerC, $answerD, $answerE, $discussion, $discussionImagePath, $correctAnswer, $questionType, $imagePath, $orderNo, $optionScores, $optionImagePaths) {
                 $question = Question::create([
                     'subtest_id'       => $subtest->id,
                     'question_type'    => $questionType,
@@ -246,6 +273,7 @@ class BulkImportQuestionController extends Controller
                         'question_id' => $question->id,
                         'option_key'  => $key,
                         'option_text' => RichTextSanitizer::sanitize($text),
+                        'image'       => $optionImagePaths[$key] ?? null,
                         // Bobot per opsi kalau diisi, selain itu kredit
                         // benar/salah biasa. Kolom ini sebelumnya tidak pernah
                         // ditulis, sehingga setiap opsi hasil impor bernilai 0
@@ -421,13 +449,17 @@ class BulkImportQuestionController extends Controller
 
             $notes = [
                 'Petunjuk Pengisian - Subtes Bobot Opsi (TKP):',
-                '- Opsi A s/d E WAJIB diisi semua (5 pilihan jawaban) untuk setiap baris soal.',
+                '- Opsi A s/d E WAJIB terisi semua untuk setiap baris soal - boleh berupa teks, gambar, atau keduanya.',
                 '- Skor A s/d E wajib diisi angka 1 sampai 5, dan setiap angka hanya boleh dipakai satu kali per baris soal.',
                 '- Harus ada satu opsi bernilai 5 (respons paling ideal) dan satu opsi bernilai 1 (paling tidak sesuai). Tidak ada opsi bernilai 0.',
                 '- Kolom Kunci Jawaban diabaikan: jawaban "benar" otomatis ditentukan dari opsi berbobot 5.',
-                '- Semua opsi A-E wajib diisi; tidak ada soal esai pada skema ini.',
-                '- Kolom Gambar: embed gambar langsung ke cell (Insert -> Pictures -> Place in Cell).',
-                '- Kolom Gambar Pembahasan: embed gambar pembahasan langsung ke cell (opsional).',
+                '- Semua opsi A-E wajib terisi; tidak ada soal esai pada skema ini.',
+                'CARA MENYISIPKAN GAMBAR - baca ini dulu:',
+                '- Pakai Insert -> Pictures -> Place OVER Cells, lalu geser gambarnya sampai sudut kiri-atasnya berada di dalam sel tujuan.',
+                '- JANGAN memakai "Place IN Cell". Excel menyimpannya dengan cara berbeda yang tidak terbaca saat impor, dan gambarnya akan hilang tanpa pesan galat.',
+                '- Kolom Gambar (A): gambar untuk soal.',
+                '- Kolom Gambar Pembahasan: gambar untuk pembahasan (opsional).',
+                '- Kolom Opsi A-E: gambar boleh ditempel langsung di sel opsinya. Satu opsi boleh berisi teks saja, gambar saja, atau teks dan gambar sekaligus.',
                 '- Baris pertama adalah header, pengisian data dimulai dari baris 2.',
                 '- Format gambar yang didukung: jpg, jpeg, png, webp.',
             ];
@@ -443,11 +475,15 @@ class BulkImportQuestionController extends Controller
 
             $notes = [
                 'Petunjuk Pengisian - Subtes Pilihan Ganda (A-E):',
-                '- Soal Pilihan Ganda: Opsi A s/d E WAJIB diisi lengkap (5 pilihan jawaban, tidak boleh dikosongkan).',
+                '- Soal Pilihan Ganda: Opsi A s/d E WAJIB terisi semua - boleh berupa teks, gambar, atau keduanya.',
                 '- Kolom Kunci Jawaban wajib diisi satu huruf: A, B, C, D, atau E sesuai opsi yang benar.',
                 '- Soal Esai: kosongkan kolom Kunci Jawaban dan kosongkan kolom Opsi A-E.',
-                '- Kolom Gambar: embed gambar langsung ke cell (Insert -> Pictures -> Place in Cell).',
-                '- Kolom Gambar Pembahasan: embed gambar pembahasan langsung ke cell (opsional).',
+                'CARA MENYISIPKAN GAMBAR - baca ini dulu:',
+                '- Pakai Insert -> Pictures -> Place OVER Cells, lalu geser gambarnya sampai sudut kiri-atasnya berada di dalam sel tujuan.',
+                '- JANGAN memakai "Place IN Cell". Excel menyimpannya dengan cara berbeda yang tidak terbaca saat impor, dan gambarnya akan hilang tanpa pesan galat.',
+                '- Kolom Gambar (A): gambar untuk soal.',
+                '- Kolom Gambar Pembahasan: gambar untuk pembahasan (opsional).',
+                '- Kolom Opsi A-E: gambar boleh ditempel langsung di sel opsinya. Satu opsi boleh berisi teks saja, gambar saja, atau teks dan gambar sekaligus.',
                 '- Baris pertama adalah header, pengisian data dimulai dari baris 2.',
                 '- Format gambar yang didukung: jpg, jpeg, png, webp.',
             ];
