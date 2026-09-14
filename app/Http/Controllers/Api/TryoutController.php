@@ -19,6 +19,9 @@ use Illuminate\Support\Str;
 
 class TryoutController extends Controller
 {
+    /** Durasi SKD CPNS sesuai ketentuan resmi, dipakai saat admin tidak mengisi sendiri. */
+    private const DURASI_SKD_DEFAULT = 100;
+
     public function index(): JsonResponse
     {
         $tryouts = Tryout::with(['creator', 'tryoutSubtests.subtest'])
@@ -43,6 +46,7 @@ class TryoutController extends Controller
             // SKD, SKB, Kedinasan) tidak dipakai UrClass.
             'category' => ['nullable', 'string', Rule::in(['UTBK', 'CPNS'])],
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
+            'duration_minutes' => ['nullable', 'integer', 'min:1', 'max:600'],
             'is_free' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
             'randomize_options' => ['nullable', 'boolean'],
@@ -63,6 +67,12 @@ class TryoutController extends Controller
         // ada tryout berjalur CPNS tapi berkategori UTBK.
         $kategori = $validated['kategori'] ?? 'utbk';
         $validated['category'] = strtoupper($kategori);
+        // Satu angka durasi untuk seluruh SKD: peserta CPNS mengerjakan semua
+        // subtes dalam satu waktu, jadi durasi per subtes tidak dipakai. 100
+        // menit adalah durasi SKD resmi, dan admin bebas mengubahnya.
+        $validated['duration_minutes'] = $kategori === 'cpns'
+            ? ($validated['duration_minutes'] ?? self::DURASI_SKD_DEFAULT)
+            : null;
         $validated['is_free'] = $validated['is_free'] ?? false;
         $validated['use_irt'] = $validated['use_irt'] ?? true;
         $validated['randomize_options'] = $validated['randomize_options'] ?? false;
@@ -173,6 +183,7 @@ class TryoutController extends Controller
             // SKD, SKB, Kedinasan) tidak dipakai UrClass.
             'category' => ['nullable', 'string', Rule::in(['UTBK', 'CPNS'])],
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
+            'duration_minutes' => ['nullable', 'integer', 'min:1', 'max:600'],
             'is_free' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
             'randomize_options' => ['nullable', 'boolean'],
@@ -196,6 +207,11 @@ class TryoutController extends Controller
         $validated['is_published'] = $validated['is_published'] ?? $tryout->is_published;
         $kategori = $validated['kategori'] ?? $tryout->kategori ?? 'utbk';
         $validated['category'] = strtoupper($kategori);
+        // Kolom yang tidak dikirim berarti "pertahankan yang ada", bukan
+        // kosongkan - form update tidak menampilkan field ini untuk UTBK.
+        $validated['duration_minutes'] = $kategori === 'cpns'
+            ? ($validated['duration_minutes'] ?? $tryout->duration_minutes ?? self::DURASI_SKD_DEFAULT)
+            : null;
 
         $tryout->update($validated);
         AuditLogger::log('Tryout', 'update', "Tryout diupdate: \"{$tryout->title}\"", $request->user(), $tryout);

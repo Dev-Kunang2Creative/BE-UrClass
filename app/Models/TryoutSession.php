@@ -37,10 +37,20 @@ class TryoutSession extends Model
         return $this->belongsTo(User::class);
     }
 
+    /**
+     * Batas waktu satu sesi CPNS, dikunci sekali lalu dibaca apa adanya.
+     *
+     * Durasinya diambil dari kolom duration_minutes milik tryout - satu angka
+     * untuk seluruh SKD, karena peserta mengerjakan semua subtes dalam satu
+     * waktu dan bebas berpindah bagian. Tryout lama yang kolomnya masih kosong
+     * jatuh kembali ke penjumlahan durasi tiap subtes, jadi batas waktu sesi
+     * yang sudah berjalan sebelum kolom ini ada tidak berubah.
+     */
     public function batasWaktuCpns(Tryout $tryout): \Illuminate\Support\Carbon
     {
         if (! $this->batas_waktu) {
-            $durasi = $tryout->tryoutSubtests()->where('is_active', true)->sum('duration_minutes');
+            $durasi = $tryout->duration_minutes
+                ?: $tryout->tryoutSubtests()->where('is_active', true)->sum('duration_minutes');
             $batas = ($this->started_at ?? now())->copy()->addMinutes((int) $durasi);
             static::whereKey($this->id)->whereNull('batas_waktu')->update(['batas_waktu' => $batas]);
             $this->refresh();

@@ -19,6 +19,7 @@ class Tryout extends Model
         'end_date',
         'category',
         'kategori',
+        'duration_minutes',
         'is_free',
         'use_irt',
         'randomize_options',
@@ -27,6 +28,7 @@ class Tryout extends Model
     ];
 
     protected $casts = [
+        'duration_minutes' => 'integer',
         'is_published' => 'boolean',
         'is_free' => 'boolean',
         'use_irt' => 'boolean',

@@ -50,6 +50,16 @@ Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
 Route::prefix('auth')->controller(AuthController::class)->group(function () {
     Route::post('/register', 'register')->middleware('throttle:5,1');
     Route::post('/login', 'login')->middleware('throttle:5,1');
+    // Jendela satu jam, bukan satu menit: yang dijaga di sini bukan beban
+    // server melainkan jumlah tebakan atas tanggal lahir dan nomor ponsel.
+    //
+    // Batas per IP-nya longgar dengan sengaja. Yang menahan tebakan atas satu
+    // akun adalah penghitung per email di AuthController (lima kali per jam);
+    // batas di sini hanya menahan penyemprotan ke banyak email sekaligus. Kalau
+    // dibuat seketat lima, satu sekolah di belakang satu IP - atau pengguna
+    // seluler yang berbagi alamat lewat CGNAT - akan saling mengunci.
+    Route::post('/forgot-password', 'forgotPassword')->middleware('throttle:15,60');
+    Route::post('/reset-password', 'resetPassword')->middleware('throttle:10,60');
     Route::get('/google/redirect', 'redirectToGoogle');
     Route::get('/google/callback', 'handleGoogleCallback');
 
