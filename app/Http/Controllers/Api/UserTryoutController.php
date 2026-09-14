@@ -687,6 +687,7 @@ class UserTryoutController extends Controller
                         'id' => $option->id,
                         'option_key' => $option->option_key,
                         'option_text' => $option->option_text,
+                        'image_url' => $option->image_url,
                     ];
                 })->values(),
                 'my_answer' => $myAnswer,
@@ -747,7 +748,8 @@ class UserTryoutController extends Controller
                     'question_type' => $q->question_type, 'question_text' => $q->question_text,
                     'question_image' => $q->question_image, 'question_image_url' => $q->question_image_url,
                     'order_no' => count($questions) + 1, 'my_answer' => $jawaban[$q->id] ?? null,
-                    'options' => $opsi->map(fn ($o) => ['id' => $o->id, 'option_key' => $o->option_key, 'option_text' => $o->option_text]),
+                    'options' => $opsi->map(fn ($o) => ['id' => $o->id, 'option_key' => $o->option_key,
+                        'option_text' => $o->option_text, 'image_url' => $o->image_url]),
                 ];
             }
         }
@@ -1388,6 +1390,7 @@ class UserTryoutController extends Controller
                             'id' => $option->id,
                             'option_key' => $option->option_key,
                             'option_text' => $option->option_text,
+                            'image_url' => $option->image_url,
                         ];
                     })->values(),
                 ],

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Formasi;
+use App\Support\TargetKampus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -16,7 +17,31 @@ class ProfileController extends Controller
         ]);
 
         $user = $request->user();
-        $user->update($validated);
+        $kategoriBaru = $validated['kategori'];
+
+        // Target yang sah di jalur lama belum tentu sah di jalur baru. Peserta
+        // CPNS sub-jalur kedinasan yang pindah ke UTBK akan membawa serta
+        // "IPDN" sebagai universitas pilihannya, dan nilai itu lolos setiap
+        // penyimpanan profil berikutnya karena tidak ada yang mengubahnya lagi.
+        //
+        // Yang dikosongkan hanya yang benar-benar bertentangan: target yang
+        // masih masuk akal di jalur baru dipertahankan, supaya pindah jalur
+        // tidak menghapus isian yang tidak perlu diisi ulang.
+        $dibersihkan = [];
+
+        foreach (['target_university_1', 'target_university_2'] as $kolom) {
+            if (TargetKampus::bertentangan($user->{$kolom}, $kategoriBaru)) {
+                $dibersihkan[$kolom] = null;
+                $dibersihkan[str_replace('university', 'major', $kolom)] = null;
+            }
+        }
+
+        // Sub-jalur adalah konsep milik CPNS saja; di UTBK ia tidak punya arti.
+        if ($kategoriBaru !== 'cpns') {
+            $dibersihkan['cpns_target_type'] = null;
+        }
+
+        $user->update($validated + $dibersihkan);
 
         return response()->json([
             'message' => 'Kategori berhasil disimpan',
@@ -61,6 +86,16 @@ class ProfileController extends Controller
         $formasiTersedia = Formasi::query()->active()->exists();
         $formasiRequired = $formasiTersedia ? $umumRequired : 'nullable';
 
+        // Daftar kampus yang disaring menurut jenis hanya membentuk isi dropdown;
+        // kolomnya sendiri menerima ketikan bebas, jadi tanpa pemeriksaan ini
+        // peserta UTBK tetap bisa menyimpan sekolah kedinasan dengan mengetik
+        // namanya. Admin dilewati - ia tidak punya jalur ujian.
+        $jalurKampus = function (string $atribut, $nilai, callable $gagal) use ($isAdmin, $kategori): void {
+            if (! $isAdmin && TargetKampus::bertentangan(is_string($nilai) ? $nilai : null, $kategori)) {
+                $gagal(TargetKampus::pesanGalat($kategori));
+            }
+        };
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'], 
             'phone_number' => [$profileRequired, 'string', 'max:20', 'regex:/^[0-9\+\-\s]+$/'],
@@ -82,9 +117,9 @@ class ProfileController extends Controller
             // Kolom yang sama menampung target PTN (UTBK) dan sekolah kedinasan
             // (CPNS): keduanya berbentuk sekolah plus program studi, jadi tidak
             // ada gunanya membuat pasangan kolom kedua yang isinya sejenis.
-            'target_university_1' => [$isCpns ? $kedinasanRequired : $targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'target_university_1' => [$isCpns ? $kedinasanRequired : $targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u', $jalurKampus],
             'target_major_1' => [$isCpns ? 'nullable' : $targetRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
-            'target_university_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'target_university_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u', $jalurKampus],
             'target_major_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
 
             'cpns_target_type' => [$isCpns && ! $isAdmin ? 'required' : 'nullable', 'in:kedinasan,umum'],

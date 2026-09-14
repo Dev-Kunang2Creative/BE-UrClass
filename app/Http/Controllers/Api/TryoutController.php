@@ -295,6 +295,7 @@ class TryoutController extends Controller
                             'id' => $option->id,
                             'option_key' => $option->option_key,
                             'option_text' => $option->option_text,
+                            'image_url' => $option->image_url,
                         ];
                     })->values(),
                 ],

@@ -245,7 +245,18 @@ class SubtestController extends Controller
         foreach ($subtest->questions as $index => $q) {
             $optionsMap = [];
             foreach ($q->options as $opt) {
-                $optionsMap[strtoupper($opt->option_key)] = trim(strip_tags(html_entity_decode($opt->option_text ?? '', ENT_QUOTES, 'UTF-8')));
+                $teks = trim(strip_tags(html_entity_decode($opt->option_text ?? '', ENT_QUOTES, 'UTF-8')));
+
+                // Opsi boleh bergambar tanpa teks sama sekali. Sel kosong akan
+                // terbaca sebagai opsi yang belum diisi, padahal isinya ada -
+                // hanya saja tidak berbentuk teks yang bisa masuk ke sel.
+                if ($teks === '' && $opt->image) {
+                    $teks = '[gambar]';
+                } elseif ($opt->image) {
+                    $teks .= ' [+gambar]';
+                }
+
+                $optionsMap[strtoupper($opt->option_key)] = $teks;
             }
 
             $cleanQuestionText = trim(strip_tags(html_entity_decode($q->question_text ?? '', ENT_QUOTES, 'UTF-8')));

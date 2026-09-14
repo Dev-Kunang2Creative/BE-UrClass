@@ -203,6 +203,10 @@ class QuestionController extends Controller
             'options.*.option_key' => ['required', 'string', Rule::in(['A', 'B', 'C', 'D', 'E'])],
             'options.*.option_text' => ['nullable', 'string'],
             'options.*.image' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
+            // Gambar opsi dipertahankan lintas update selama tidak ada berkas
+            // baru yang diunggah, jadi tanpa penanda ini gambar yang terlanjur
+            // terpasang tidak punya cara untuk dilepas - hanya bisa ditukar.
+            'options.*.delete_image' => ['nullable', 'boolean'],
             'options.*.score' => ['nullable', 'numeric', 'min:0', 'max:100'],
             'delete_question_image' => ['nullable', 'boolean'],
             'delete_discussion_image' => ['nullable', 'boolean'],
@@ -291,8 +295,13 @@ class QuestionController extends Controller
                 $oldImage = $oldOptions->has($optKey) ? $oldOptions[$optKey]->image : null;
                 $optImage = $oldImage;
 
+                if (filter_var($option['delete_image'] ?? false, FILTER_VALIDATE_BOOLEAN) && $oldImage) {
+                    Storage::disk('public')->delete($oldImage);
+                    $optImage = null;
+                }
+
                 if ($request->hasFile("options.{$index}.image")) {
-                    if ($oldImage) Storage::disk('public')->delete($oldImage);
+                    if ($optImage) Storage::disk('public')->delete($optImage);
                     $optImage = $request->file("options.{$index}.image")->store('option-images', 'public');
                 }
 
