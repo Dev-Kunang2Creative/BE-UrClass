@@ -344,12 +344,12 @@ class BulkImportQuestionController extends Controller
         $value = $cell->getValue();
 
         if (! $value instanceof RichText) {
-            return nl2br(e(trim((string) $cell->getFormattedValue())), false);
+            return nl2br(e(trim((string) $cell->getFormattedValue()), false), false);
         }
 
         $html = '';
         foreach ($value->getRichTextElements() as $element) {
-            $text = nl2br(e($element->getText()), false);
+            $text = nl2br(e($element->getText(), false), false);
 
             if ($element instanceof Run) {
                 $font = $element->getFont();

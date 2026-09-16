@@ -276,4 +276,65 @@ class BulkImportQuestionTest extends TestCase
 
         @unlink($tmpPath);
     }
+
+    public function test_bulk_import_preserves_math_comparison_symbols_without_double_encoding(): void
+    {
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+
+        $headers = [
+            'Gambar', 'Soal', 'Opsi A', 'Opsi B', 'Opsi C', 'Opsi D', 'Opsi E',
+            'Kunci Jawaban', 'Pembahasan', 'Gambar Pembahasan',
+        ];
+        $sheet->fromArray($headers, null, 'A1');
+
+        $row2 = [
+            '',
+            'Manakah kondisi yang benar jika x < y?',
+            '2A < 3B',
+            'A > B',
+            '4A < 5B',
+            'A = B',
+            '3A = 4B',
+            'B',
+            'Pembahasan menunjukkan A > B.',
+            '',
+        ];
+        $sheet->fromArray($row2, null, 'A2');
+
+        $tmpPath = tempnam(sys_get_temp_dir(), 'import_math_') . '.xlsx';
+        $writer = new Xlsx($spreadsheet);
+        $writer->save($tmpPath);
+
+        $uploadedFile = new UploadedFile(
+            $tmpPath,
+            'soal_matematika.xlsx',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            null,
+            true,
+        );
+
+        $response = $this->actingAs($this->admin)->post(
+            "/api/admin/subtests/{$this->subtest->id}/questions/bulk-import",
+            ['file' => $uploadedFile],
+        );
+
+        $response->assertCreated();
+
+        $question = Question::query()->where('subtest_id', $this->subtest->id)->firstOrFail();
+        $this->assertStringNotContainsString('&amp;lt;', $question->question_text);
+        $this->assertSame('Manakah kondisi yang benar jika x &lt; y?', $question->question_text);
+
+        $options = $question->options->keyBy('option_key');
+        $this->assertStringNotContainsString('&amp;lt;', $options['A']->option_text);
+        $this->assertSame('2A &lt; 3B', $options['A']->option_text);
+
+        $this->assertStringNotContainsString('&amp;gt;', $options['B']->option_text);
+        $this->assertSame('A &gt; B', $options['B']->option_text);
+
+        $this->assertStringNotContainsString('&amp;lt;', $options['C']->option_text);
+        $this->assertSame('4A &lt; 5B', $options['C']->option_text);
+
+        @unlink($tmpPath);
+    }
 }
