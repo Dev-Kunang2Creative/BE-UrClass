@@ -36,6 +36,8 @@ use App\Http\Controllers\Api\AdminTryoutProofController;
 use App\Http\Controllers\Api\BulkImportQuestionController;
 use App\Http\Controllers\Api\SubtestCategoryController;
 use App\Http\Controllers\Api\TicketLogController;
+use App\Http\Controllers\Api\AdminTestimonialController;
+use App\Http\Controllers\Api\LandingTestimonialController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -43,6 +45,7 @@ use Illuminate\Support\Facades\Route;
 | Public Routes
 |--------------------------------------------------------------------------
 */
+Route::get('/landing/testimonials', [LandingTestimonialController::class, 'index']);
 
 Route::post('/midtrans/callback', [PaymentCallbackController::class, 'handle']);
 Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
@@ -264,4 +267,7 @@ Route::middleware(['auth:sanctum', 'admin'])
             Route::post('/approve', 'approve');
             Route::post('/reject', 'reject');
         });
+
+        // --- TESTIMONIALS ---
+        Route::apiResource('testimonials', AdminTestimonialController::class);
     });

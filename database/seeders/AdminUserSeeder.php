@@ -16,6 +16,8 @@ class AdminUserSeeder extends Seeder
                 'name' => 'Admin UrClass',
                 'password' => Hash::make('password123'),
                 'role' => 'admin',
+                'is_dummy' => false,
+                'email_verified_at' => now(),
             ]
         );
 
@@ -25,6 +27,8 @@ class AdminUserSeeder extends Seeder
                 'name' => 'Admin Amunisi',
                 'password' => Hash::make('password123'),
                 'role' => 'admin',
+                'is_dummy' => false,
+                'email_verified_at' => now(),
             ]
         );
 
@@ -35,6 +39,8 @@ class AdminUserSeeder extends Seeder
                 'password' => Hash::make('password123'),
                 'role' => 'user',
                 'kategori' => 'utbk',
+                'is_dummy' => false,
+                'email_verified_at' => now(),
             ]
         );
     }

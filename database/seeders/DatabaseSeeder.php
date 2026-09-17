@@ -23,6 +23,7 @@ class DatabaseSeeder extends Seeder
             AiSettingSeeder::class,
             KedinasanSeeder::class,
             InstansiFormasiSeeder::class,
+            TestimonialSeeder::class,
         ]);
     }
 }
