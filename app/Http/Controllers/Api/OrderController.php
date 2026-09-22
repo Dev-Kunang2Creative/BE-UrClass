@@ -65,6 +65,7 @@ class OrderController extends Controller
                 'message' => 'Lanjutkan pembayaran sebelumnya',
                 'data' => $existingOrder->fresh()->load('items.package'),
                 'snap_token' => $snapToken,
+                'snap' => self::snapEnvironment(),
             ]);
         }
 
@@ -107,8 +108,32 @@ class OrderController extends Controller
         return response()->json([
             'message' => 'Silakan lakukan pembayaran',
             'data' => $order->load('items.package'),
-            'snap_token' => $snapToken
+            'snap_token' => $snapToken,
+            'snap' => self::snapEnvironment(),
         ], 201);
+    }
+
+    /**
+     * Lingkungan Snap yang menerbitkan token ini, ikut dikirim bersama tokennya.
+     *
+     * Token Snap hanya berlaku di lingkungan yang menerbitkannya. Selama
+     * frontend menentukan sendiri hendak memuat snap.js sandbox atau produksi
+     * lewat variabel build-nya sendiri, ada dua saklar terpisah yang harus
+     * kebetulan sama - dan begitu berbeda, Snap menjawab "Transaksi tidak
+     * ditemukan" atas token yang sebenarnya sah. Dengan mengirim keputusannya
+     * dari sini, tidak ada lagi yang perlu ditebak: yang memuat snap.js
+     * memakai jawaban dari yang menerbitkan tokennya.
+     *
+     * client_key memang ditujukan untuk browser - ia yang dipasang Midtrans di
+     * atribut data-client-key. Yang rahasia adalah server key, dan itu tidak
+     * pernah ikut ke sini.
+     */
+    private static function snapEnvironment(): array
+    {
+        return [
+            'is_production' => (bool) config('midtrans.is_production'),
+            'client_key' => config('midtrans.client_key'),
+        ];
     }
 
     public function show(Request $request, Order $order): JsonResponse
