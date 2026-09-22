@@ -334,12 +334,22 @@ jobs:
         run: |
           fail=0
           JSON='-H Accept:application/json'
+          # Lima percobaan berjeda enam detik, sama seperti FE-UrClass. Origin
+          # di shared hosting ini sesekali menolak sambungan dari Cloudflare -
+          # yang muncul sebagai 520/522/525 selama beberapa detik, lalu pulih
+          # sendiri. Tiga percobaan berjeda lima detik ternyata masih terlalu
+          # pendek: satu deploy gagal di pemeriksaan /.env dengan 525 padahal
+          # berkasnya tidak pernah terekspos.
+          #
+          # Yang dinaikkan keandalan pemeriksaannya, BUKAN ambangnya. /.env
+          # tetap wajib berakhir di 403; 5xx tetap dihitung gagal kalau
+          # bertahan sampai percobaan terakhir.
           probe() { # label, expected status, curl args...
             label="$1"; want="$2"; shift 2
-            for i in 1 2 3; do
+            for i in 1 2 3 4 5; do
               code=$(curl -s -o /tmp/body -w '%{http_code}' "$@" || echo 000)
               [ "$code" = "$want" ] && break
-              sleep 5
+              sleep 6
             done
             if [ "$code" = "$want" ]; then
               echo "  PASS  $label  -> $code"

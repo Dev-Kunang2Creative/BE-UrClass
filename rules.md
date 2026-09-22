@@ -120,6 +120,31 @@ baru akan **500 sampai `php artisan migrate` dijalankan manual** di server.
 Setiap kali sebuah perubahan menambah migrasi, sebut ini saat menyerahkan
 pekerjaan. Jangan menganggap deploy sudah cukup.
 
+### Verifikasi deploy harus mencoba ulang cukup lama
+
+`probe()` di `deploy.yml` dan `deploy-dev.yml` mencoba lima kali dengan jeda
+enam detik. Jangan diturunkan.
+
+**Kejadiannya:** sebuah deploy gagal di baris `/.env  -> 525 (expected 403)`.
+Berkasnya tidak pernah terekspos — origin di shared hosting ini sesekali menolak
+sambungan dari Cloudflare, yang muncul sebagai 520/522/525 selama beberapa detik
+lalu pulih sendiri. Dengan tiga percobaan berjeda lima detik, jendela itu belum
+tentu terlewati.
+
+Pengukuran saat kejadian: sekitar **satu dari sepuluh permintaan** ke
+`prod-api.urclass.id` gagal begitu, sementara host frontend di akun yang sama
+melayani sepuluh dari sepuluh permintaan dengan waktu di bawah 0,25 detik. Jadi
+sebabnya bukan jaringan atau Cloudflare, melainkan origin API-nya sendiri.
+
+**Yang boleh diperbaiki keandalan pemeriksaannya, bukan ambangnya.** `/.env`
+tetap wajib berakhir di 403, dan 5xx yang bertahan sampai percobaan terakhir
+tetap menggagalkan deploy. Melonggarkan ambangnya berarti menukar pemeriksaan
+keamanan dengan ketenangan palsu.
+
+Kalau kegagalan ini makin sering, yang perlu diperiksa bukan workflow-nya
+melainkan batas resource paket hosting — hPanel > Hosting > Kelola >
+Penggunaan Sumber Daya, lihat penghitung batas CPU, memori, dan entry process.
+
 ### Marker seed di dev diam-diam melewatkan seeder yang ditambahkan kemudian
 
 `deploy-dev.yml` menjalankan seeder sekali per lingkungan lewat berkas penanda di
