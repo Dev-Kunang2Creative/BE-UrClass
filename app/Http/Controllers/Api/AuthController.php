@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Services\AuditLogger;
+use App\Support\AturanMasukan;
 use App\Support\NomorPonsel;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -35,12 +36,10 @@ class AuthController extends Controller
     public function register(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
+            'name' => ['required', 'string', 'max:'.AturanMasukan::NAMA_MAKS, 'regex:'.AturanMasukan::NAMA],
             'email' => ['required', 'email', 'max:255', 'unique:users,email'],
             'password' => ['required', 'string', 'min:6', 'confirmed'],
-        ], [
-            'name.regex' => 'Nama tidak boleh mengandung tag HTML atau karakter script.',
-        ]);
+        ], AturanMasukan::pesan());
 
         $turnstileToken = $request->input('cf_turnstile_response') ?? $request->input('cf-turnstile-response');
         if (! \App\Services\TurnstileService::verify($turnstileToken, $request->ip())) {

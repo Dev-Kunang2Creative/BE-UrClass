@@ -4,6 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Formasi;
+use App\Support\AturanMasukan;
+use App\Support\Jenjang;
+use App\Support\NomorPonsel;
 use App\Support\TargetKampus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -36,10 +39,17 @@ class ProfileController extends Controller
             }
         }
 
-        // Sub-jalur adalah konsep milik CPNS saja; di UTBK ia tidak punya arti.
-        if ($kategoriBaru !== 'cpns') {
-            $dibersihkan['cpns_target_type'] = null;
-        }
+        // cpns_target_type sengaja TIDAK dikosongkan saat pindah ke UTBK.
+        //
+        // Dulu dikosongkan dengan alasan "sub-jalur milik CPNS saja", dan itu
+        // menimbulkan bug: kembali ke CPNS, sub-jalurnya kosong sehingga form
+        // jatuh ke "kedinasan" - dan pilihan itu menyembunyikan seluruh bagian
+        // instansi & formasi. Peserta melihat instansi yang sudah diisinya
+        // lenyap, padahal barisnya masih utuh di database.
+        //
+        // Nilainya memang tidak dipakai selama peserta berada di UTBK, tapi
+        // tidak dipakai bukan berarti salah. Yang boleh dibersihkan hanya yang
+        // bertentangan dengan jalur barunya, seperti target kampus di atas.
 
         $user->update($validated + $dibersihkan);
 
@@ -96,14 +106,34 @@ class ProfileController extends Controller
             }
         };
 
+        // Peserta boleh mengetik "0812...", "62812...", atau "+62 812-3456-7890";
+        // yang divalidasi dan disimpan selalu bentuk bakunya. Menolak mentah-
+        // mentah selain "+62" berarti menyalahkan peserta atas format, padahal
+        // nomornya sudah benar.
+        if ($request->filled('phone_number')) {
+            $request->merge([
+                'phone_number' => NomorPonsel::keBentukInternasional($request->input('phone_number')),
+            ]);
+        }
+
         $validated = $request->validate([
-            'name' => ['required', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'], 
-            'phone_number' => [$profileRequired, 'string', 'max:20', 'regex:/^[0-9\+\-\s]+$/'],
+            'name' => ['required', 'string', 'max:'.AturanMasukan::NAMA_MAKS, 'regex:'.AturanMasukan::NAMA],
+            // Dinormalkan ke bentuk +62 sebelum divalidasi, jadi peserta boleh
+            // mengetik "0812...", "62812...", atau "+62 812-..." sesukanya dan
+            // yang tersimpan tetap satu bentuk.
+            'phone_number' => [$profileRequired, 'string', 'max:20', 'regex:'.AturanMasukan::TELEPON],
             'birth_date' => [$profileRequired, 'date'],
             'gender' => [$profileRequired, 'in:L,P'],
-            
-            'school_origin' => [$profileRequired, 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
-            'grade_level' => [$profileRequired, 'string', 'max:50', 'regex:/^[^\<\>]+$/u'],
+
+            'school_origin' => [$profileRequired, 'string', 'max:255', 'regex:'.AturanMasukan::TEKS_PENDEK],
+            'grade_level' => [$profileRequired, 'string', 'max:50', 'regex:'.AturanMasukan::TEKS_PENDEK],
+            // Wajib hanya kalau jenjangnya pendidikan tinggi. Siswa SMA aktif
+            // tidak punya jurusan, dan memintanya berarti meminta diisi
+            // asal-asalan supaya formnya bisa disimpan.
+            'education_major' => [
+                Jenjang::butuhJurusan($request->input('grade_level')) && ! $isAdmin ? 'required' : 'nullable',
+                'string', 'max:255', 'regex:'.AturanMasukan::TEKS_PENDEK,
+            ],
 
             // Previously absent from the rules, so they never reached
             // $validated and were never saved - the form asked for them and
@@ -128,10 +158,9 @@ class ProfileController extends Controller
             'target_instansi_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
             'target_formasi_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
         ], [
-            'name.regex' => 'Nama tidak boleh mengandung tag HTML atau karakter script.',
-            'phone_number.regex' => 'Format nomor telepon tidak valid.',
-            'school_origin.regex' => 'Asal sekolah tidak boleh mengandung tag HTML.',
-            'grade_level.regex' => 'Kelas tidak boleh mengandung tag HTML.',
+            ...AturanMasukan::pesan(),
+            'education_major.required' => 'Jurusan pendidikan terakhir harus diisi.',
+            'education_major.regex' => 'Jurusan mengandung karakter yang tidak diperbolehkan.',
             'target_university_1.regex' => 'Pilihan universitas tidak boleh mengandung tag HTML.',
             'target_major_1.regex' => 'Pilihan jurusan tidak boleh mengandung tag HTML.',
             'target_university_2.regex' => 'Pilihan universitas tidak boleh mengandung tag HTML.',
@@ -153,6 +182,15 @@ class ProfileController extends Controller
         $sanitized = array_map(function ($value) {
             return is_string($value) ? strip_tags(trim($value)) : $value;
         }, $validated);
+
+        // Jurusan hanya berarti untuk jenjang pendidikan tinggi. Siswa SMA aktif
+        // yang sebelumnya terdaftar sebagai lulusan akan meninggalkan jurusan
+        // lamanya di sana kalau tidak dikosongkan - dan nilai itu tidak akan
+        // pernah terlihat lagi untuk diperbaiki.
+        if (array_key_exists('grade_level', $sanitized)
+            && ! Jenjang::butuhJurusan($sanitized['grade_level'])) {
+            $sanitized['education_major'] = null;
+        }
 
         $user->update($sanitized);
 

@@ -104,7 +104,34 @@ class TargetKampusLintasJalurTest extends TestCase
         $segar = $user->fresh();
         $this->assertNull($segar->target_university_1);
         $this->assertNull($segar->target_major_1);
-        $this->assertNull($segar->cpns_target_type);
+
+        // Sub-jalurnya justru harus bertahan. Mengosongkannya pernah dilakukan
+        // dan menimbulkan bug: kembali ke CPNS, form jatuh ke "kedinasan" dan
+        // menyembunyikan instansi yang sudah diisi peserta.
+        $this->assertSame('kedinasan', $segar->cpns_target_type);
+    }
+
+    public function test_pindah_jalur_pulang_pergi_mempertahankan_sub_jalur_dan_instansi(): void
+    {
+        // Sub-jalur yang dikosongkan saat pindah ke UTBK membuat form jatuh ke
+        // "kedinasan" begitu peserta kembali - dan pilihan itu menyembunyikan
+        // seluruh bagian instansi, sehingga instansi yang sudah diisi tampak
+        // lenyap padahal barisnya masih utuh.
+        $user = User::factory()->create([
+            'kategori' => 'cpns',
+            'role' => 'user',
+            'cpns_target_type' => 'umum',
+            'target_instansi_1' => 'Kementerian Keuangan',
+            'target_formasi_1' => 'Analis Anggaran',
+        ]);
+
+        $this->actingAs($user)->putJson('/api/profile/kategori', ['kategori' => 'utbk'])->assertOk();
+        $this->actingAs($user)->putJson('/api/profile/kategori', ['kategori' => 'cpns'])->assertOk();
+
+        $segar = $user->fresh();
+        $this->assertSame('umum', $segar->cpns_target_type);
+        $this->assertSame('Kementerian Keuangan', $segar->target_instansi_1);
+        $this->assertSame('Analis Anggaran', $segar->target_formasi_1);
     }
 
     public function test_pindah_jalur_mempertahankan_target_yang_masih_sah(): void

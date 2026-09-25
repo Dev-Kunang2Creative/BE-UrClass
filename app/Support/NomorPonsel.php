@@ -18,6 +18,29 @@ namespace App\Support;
  */
 class NomorPonsel
 {
+    /**
+     * Bentuk baku untuk disimpan: +62 diikuti nomor tanpa angka nol di depan.
+     *
+     * `normalkan()` di bawah tetap menghasilkan bentuk lokal berawalan "0" dan
+     * tetap dipakai untuk membandingkan - ia sengaja tidak diubah, karena
+     * verifikasi lupa password membandingkan apa yang diketik peserta dengan
+     * apa yang tersimpan, dan keduanya harus melewati fungsi yang sama.
+     * Nomor lama yang tersimpan sebagai "08..." tetap cocok lewat jalur itu.
+     *
+     * Mengembalikan string kosong kalau masukannya tidak memuat angka sama
+     * sekali, supaya pemanggilnya bisa membedakan "tidak diisi" dari "diisi".
+     */
+    public static function keBentukInternasional(?string $nomor): string
+    {
+        $lokal = self::normalkan($nomor);
+
+        if ($lokal === '') {
+            return '';
+        }
+
+        return '+62'.ltrim($lokal, '0');
+    }
+
     public static function normalkan(?string $nomor): string
     {
         $angka = preg_replace('/\D+/', '', (string) $nomor) ?? '';

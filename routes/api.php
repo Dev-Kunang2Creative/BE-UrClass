@@ -35,6 +35,7 @@ use App\Http\Controllers\Api\AdminTicketRedeemCodeController;
 use App\Http\Controllers\Api\AdminTryoutProofController;
 use App\Http\Controllers\Api\BulkImportQuestionController;
 use App\Http\Controllers\Api\SubtestCategoryController;
+use App\Http\Controllers\Api\TrackCardController;
 use App\Http\Controllers\Api\TicketLogController;
 use App\Http\Controllers\Api\AdminTestimonialController;
 use App\Http\Controllers\Api\LandingTestimonialController;
@@ -46,6 +47,9 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 Route::get('/landing/testimonials', [LandingTestimonialController::class, 'index']);
+// Teks kartu pemilihan jalur. Terbuka karena isinya memang teks publik, dan
+// halaman pemilihannya perlu menampilkannya sebelum peserta memilih apa pun.
+Route::get('/track-cards', [TrackCardController::class, 'index']);
 
 Route::post('/midtrans/callback', [PaymentCallbackController::class, 'handle']);
 Route::get('/subtest-categories', [SubtestCategoryController::class, 'index']);
@@ -270,4 +274,10 @@ Route::middleware(['auth:sanctum', 'admin'])
 
         // --- TESTIMONIALS ---
         Route::apiResource('testimonials', AdminTestimonialController::class);
+
+        // Hanya baca dan ubah: kategorinya tetap dua, jadi tidak ada yang bisa
+        // dibuat atau dihapus - hanya teksnya yang berubah.
+        Route::get('/track-cards', [TrackCardController::class, 'adminIndex']);
+        Route::put('/track-cards/{kategori}', [TrackCardController::class, 'update']);
+        Route::post('/track-cards/{kategori}/reset', [TrackCardController::class, 'reset']);
     });

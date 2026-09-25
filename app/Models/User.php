@@ -27,6 +27,7 @@ class User extends Authenticatable
         'gender',
         'school_origin',
         'grade_level',
+        'education_major',
         'province',
         'city',
         'target_university_1',
