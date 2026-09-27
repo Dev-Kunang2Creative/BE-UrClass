@@ -1289,7 +1289,10 @@ class UserTryoutController extends Controller
             return response()->json(['message' => 'Akses tryout tidak ditemukan'], 404);
         }
 
-        if ($access->discussion_unlocked || !$tryout->is_free) {
+        // Sudah terbuka, atau memang tidak pernah berbayar di tryout ini -
+        // dua-duanya berarti tidak ada yang perlu dibuka, dan menagih tiket
+        // untuk sesuatu yang gratis adalah kegagalan yang paling mahal di sini.
+        if ($access->discussion_unlocked || ! $tryout->pembahasanBerbayar()) {
             return response()->json(['message' => 'Pembahasan sudah terbuka'], 422);
         }
 
@@ -1357,7 +1360,10 @@ class UserTryoutController extends Controller
             ->where('tryout_id', $tryout->id)
             ->first();
 
-        $isUnlocked = !$tryout->is_free || ($access && $access->discussion_unlocked);
+        // Terkunci hanya kalau tryout ini memang menagih tiket untuk pembahasan
+        // DAN peserta belum membayarnya.
+        $isUnlocked = ! $tryout->pembahasanBerbayar()
+            || ($access && $access->discussion_unlocked);
 
         $data = $questions->map(function ($question) use ($userAnswers, $tryout, $isUnlocked, $session) {
             $answer = $userAnswers->get($question->id);
@@ -1404,6 +1410,12 @@ class UserTryoutController extends Controller
                 'tryout_id' => $tryout->id,
                 'tryout_title' => $tryout->title,
                 'attempt_number' => $session->attempt_number,
+                // Dikirim tegas, bukan dibiarkan disimpulkan frontend.
+                // Sebelumnya frontend menebaknya dengan mencocokkan teks
+                // "(Gunakan 1 Tiket untuk pembahasan)" di dalam pembahasan -
+                // mengubah kalimat itu di sini akan diam-diam merusak tombol
+                // bukanya, dan aturannya sekarang punya dua syarat.
+                'discussion_locked' => ! $isUnlocked,
                 'review' => $data,
             ],
         ]);

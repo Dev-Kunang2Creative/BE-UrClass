@@ -21,6 +21,7 @@ class Tryout extends Model
         'kategori',
         'duration_minutes',
         'is_free',
+        'discussion_requires_ticket',
         'use_irt',
         'randomize_options',
         'is_published',
@@ -31,11 +32,24 @@ class Tryout extends Model
         'duration_minutes' => 'integer',
         'is_published' => 'boolean',
         'is_free' => 'boolean',
+        'discussion_requires_ticket' => 'boolean',
         'use_irt' => 'boolean',
         'randomize_options' => 'boolean',
         'start_date' => 'datetime',
         'end_date' => 'datetime',
     ];
+
+    /**
+     * Apakah peserta harus membayar satu tiket untuk membuka pembahasan.
+     *
+     * Dua syarat, dan keduanya perlu: tryout berbayar sudah memasukkan
+     * pembahasan ke dalam tiket yang dipakai mengerjakan, jadi menagih lagi
+     * berarti menagih dua kali untuk hal yang sama.
+     */
+    public function pembahasanBerbayar(): bool
+    {
+        return $this->is_free && $this->discussion_requires_ticket;
+    }
 
     public function getImageUrlAttribute()
     {

@@ -48,6 +48,7 @@ class TryoutController extends Controller
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
             'duration_minutes' => ['nullable', 'integer', 'min:1', 'max:600'],
             'is_free' => ['nullable', 'boolean'],
+            'discussion_requires_ticket' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
             'randomize_options' => ['nullable', 'boolean'],
             'is_published' => ['nullable', 'boolean'],
@@ -74,6 +75,10 @@ class TryoutController extends Controller
             ? ($validated['duration_minutes'] ?? self::DURASI_SKD_DEFAULT)
             : null;
         $validated['is_free'] = $validated['is_free'] ?? false;
+        // Bawaannya menagih tiket, sama seperti perilaku sebelum pengaturan ini
+        // ada. Nilainya tetap disimpan untuk tryout berbayar juga, supaya tidak
+        // hilang kalau tryout itu kelak diubah jadi gratis.
+        $validated['discussion_requires_ticket'] = $validated['discussion_requires_ticket'] ?? true;
         $validated['use_irt'] = $validated['use_irt'] ?? true;
         $validated['randomize_options'] = $validated['randomize_options'] ?? false;
         $validated['is_published'] = $validated['is_published'] ?? false;
@@ -185,6 +190,7 @@ class TryoutController extends Controller
             'kategori' => ['nullable', 'string', Rule::in(['utbk', 'cpns'])],
             'duration_minutes' => ['nullable', 'integer', 'min:1', 'max:600'],
             'is_free' => ['nullable', 'boolean'],
+            'discussion_requires_ticket' => ['nullable', 'boolean'],
             'use_irt' => ['nullable', 'boolean'],
             'randomize_options' => ['nullable', 'boolean'],
             'is_published' => ['nullable', 'boolean'],
@@ -202,6 +208,8 @@ class TryoutController extends Controller
         }
 
         $validated['is_free'] = $validated['is_free'] ?? $tryout->is_free;
+        $validated['discussion_requires_ticket'] = $validated['discussion_requires_ticket']
+            ?? $tryout->discussion_requires_ticket;
         $validated['use_irt'] = $validated['use_irt'] ?? $tryout->use_irt;
         $validated['randomize_options'] = $validated['randomize_options'] ?? $tryout->randomize_options;
         $validated['is_published'] = $validated['is_published'] ?? $tryout->is_published;
