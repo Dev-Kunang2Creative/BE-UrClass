@@ -52,6 +52,9 @@ class AturanMasukan
      */
     public const TEKS_PENDEK = '/^[\p{L}\d][\p{L}\d\s.,\'\-\/()]*$/u';
 
+    /** Teks kartu promosi juga memakai ampersand untuk pasangan jalur resmi. */
+    public const TEKS_KARTU = '/^[\p{L}\d][\p{L}\d\s.,\'&\-\/()]*$/u';
+
     /** @return array<string, string> Pesan galat, sejajar dengan pola di atas. */
     public static function pesan(): array
     {

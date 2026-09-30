@@ -79,7 +79,9 @@ class TryoutController extends Controller
         // ada. Nilainya tetap disimpan untuk tryout berbayar juga, supaya tidak
         // hilang kalau tryout itu kelak diubah jadi gratis.
         $validated['discussion_requires_ticket'] = $validated['discussion_requires_ticket'] ?? true;
-        $validated['use_irt'] = $validated['use_irt'] ?? true;
+        // Jalur menentukan metode skor akhir. Payload klien tidak boleh
+        // mengaktifkan IRT pada SKD atau mematikannya pada UTBK.
+        $validated['use_irt'] = $kategori === 'utbk';
         $validated['randomize_options'] = $validated['randomize_options'] ?? false;
         $validated['is_published'] = $validated['is_published'] ?? false;
 
@@ -210,11 +212,11 @@ class TryoutController extends Controller
         $validated['is_free'] = $validated['is_free'] ?? $tryout->is_free;
         $validated['discussion_requires_ticket'] = $validated['discussion_requires_ticket']
             ?? $tryout->discussion_requires_ticket;
-        $validated['use_irt'] = $validated['use_irt'] ?? $tryout->use_irt;
         $validated['randomize_options'] = $validated['randomize_options'] ?? $tryout->randomize_options;
         $validated['is_published'] = $validated['is_published'] ?? $tryout->is_published;
         $kategori = $validated['kategori'] ?? $tryout->kategori ?? 'utbk';
         $validated['category'] = strtoupper($kategori);
+        $validated['use_irt'] = $kategori === 'utbk';
         // Kolom yang tidak dikirim berarti "pertahankan yang ada", bukan
         // kosongkan - form update tidak menampilkan field ini untuk UTBK.
         $validated['duration_minutes'] = $kategori === 'cpns'

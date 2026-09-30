@@ -57,6 +57,20 @@ class TrackCardTest extends TestCase
             ->assertJsonPath('data.0.title', 'Tryout UTBK - SNBT');
     }
 
+    public function test_kartu_jalur_menerima_ampersand_pada_teks_pendek(): void
+    {
+        $this->actingAs($this->admin())->putJson('/api/admin/track-cards/cpns', [
+            'title' => 'PTN & ASN',
+            'badge' => 'PTN & GAP YEAR',
+            'cta' => 'UTBK & CPNS',
+            'features' => ['Tryout & pembahasan'],
+        ])->assertOk()
+            ->assertJsonPath('data.title', 'PTN & ASN')
+            ->assertJsonPath('data.badge', 'PTN & GAP YEAR')
+            ->assertJsonPath('data.cta', 'UTBK & CPNS')
+            ->assertJsonPath('data.features.0', 'Tryout & pembahasan');
+    }
+
     public function test_kolom_yang_dikosongkan_kembali_ke_teks_bawaan(): void
     {
         // Kartu tanpa judul adalah satu-satunya keadaan yang tidak boleh bisa

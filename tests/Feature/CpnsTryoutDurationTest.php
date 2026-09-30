@@ -120,4 +120,45 @@ class CpnsTryoutDurationTest extends TestCase
             'title' => 'SKD', 'kategori' => 'cpns', 'duration_minutes' => 601,
         ])->assertUnprocessable()->assertJsonValidationErrors('duration_minutes');
     }
+
+    public function test_create_memaksa_irt_sesuai_jalur_tryout(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+
+        $this->actingAs($admin)->postJson('/api/admin/tryouts', [
+            'title' => 'SKD CPNS',
+            'kategori' => 'cpns',
+            'use_irt' => true,
+        ])->assertCreated()->assertJsonPath('data.use_irt', false);
+
+        $this->postJson('/api/admin/tryouts', [
+            'title' => 'UTBK SNBT',
+            'kategori' => 'utbk',
+            'use_irt' => false,
+        ])->assertCreated()->assertJsonPath('data.use_irt', true);
+    }
+
+    public function test_update_memaksa_irt_saat_jalur_tryout_berubah(): void
+    {
+        $admin = User::factory()->create(['role' => 'admin']);
+        $tryout = Tryout::create([
+            'title' => 'Tryout Lama',
+            'kategori' => 'utbk',
+            'category' => 'UTBK',
+            'use_irt' => true,
+            'created_by' => $admin->id,
+        ]);
+
+        $this->actingAs($admin)->putJson("/api/admin/tryouts/{$tryout->id}", [
+            'title' => 'SKD CPNS',
+            'kategori' => 'cpns',
+            'use_irt' => true,
+        ])->assertOk()->assertJsonPath('data.use_irt', false);
+
+        $this->putJson("/api/admin/tryouts/{$tryout->id}", [
+            'title' => 'UTBK SNBT',
+            'kategori' => 'utbk',
+            'use_irt' => false,
+        ])->assertOk()->assertJsonPath('data.use_irt', true);
+    }
 }

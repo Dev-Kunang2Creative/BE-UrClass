@@ -8,7 +8,6 @@ use App\Services\AuditLogger;
 use App\Support\AturanMasukan;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\Rule;
 
 class TrackCardController extends Controller
 {
@@ -29,14 +28,14 @@ class TrackCardController extends Controller
         abort_unless(in_array($kategori, TrackCard::KATEGORI, true), 404);
 
         $validated = $request->validate([
-            'title' => ['nullable', 'string', 'max:80', 'regex:'.AturanMasukan::TEKS_PENDEK],
-            'badge' => ['nullable', 'string', 'max:40', 'regex:'.AturanMasukan::TEKS_PENDEK],
-            'cta' => ['nullable', 'string', 'max:60', 'regex:'.AturanMasukan::TEKS_PENDEK],
+            'title' => ['nullable', 'string', 'max:80', 'regex:'.AturanMasukan::TEKS_KARTU],
+            'badge' => ['nullable', 'string', 'max:40', 'regex:'.AturanMasukan::TEKS_KARTU],
+            'cta' => ['nullable', 'string', 'max:60', 'regex:'.AturanMasukan::TEKS_KARTU],
             'description' => ['nullable', 'string', 'max:300'],
             // Tiga poin adalah yang muat di kartunya. Lebih dari itu akan
             // memanjangkan satu kartu saja dan membuat keduanya tidak sejajar.
             'features' => ['nullable', 'array', 'max:3'],
-            'features.*' => ['required', 'string', 'max:80', 'regex:'.AturanMasukan::TEKS_PENDEK],
+            'features.*' => ['required', 'string', 'max:80', 'regex:'.AturanMasukan::TEKS_KARTU],
         ], [
             'features.max' => 'Maksimal 3 poin keunggulan per kartu.',
             'title.regex' => 'Judul mengandung karakter yang tidak diperbolehkan.',
