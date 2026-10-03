@@ -247,6 +247,15 @@ class OrderController extends Controller
         Config::$isSanitized = config('midtrans.is_sanitized');
         Config::$is3ds = config('midtrans.is_3ds');
 
+        $pembeli = array_filter([
+            'first_name' => $request->user()->name ?? 'Siswa',
+            'email' => $request->user()->email,
+            // Ikut tampil di dashboard dan memudahkan menghubungi pembeli saat
+            // pembayarannya bermasalah. Dibuang kalau kosong, karena Midtrans
+            // menolak nomor yang tidak berbentuk.
+            'phone' => $request->user()->phone_number,
+        ]);
+
         return Snap::getSnapToken(self::denganMetodePembayaran([
             'transaction_details' => [
                 'order_id' => $order->order_code,
@@ -257,11 +266,52 @@ class OrderController extends Controller
                 'unit' => 'minute',
                 'duration' => self::PAYMENT_EXPIRY_MINUTES,
             ],
-            'customer_details' => [
-                'first_name' => $request->user()->name ?? 'Siswa',
-                'email' => $request->user()->email,
-            ],
+            // Tanpa ini, transaksi di dashboard Midtrans hanya berisi nominal -
+            // tidak ada keterangan paket apa yang dibeli, sehingga menelusuri
+            // satu pembayaran berarti mencocokkan order_code secara manual.
+            'item_details' => self::rincianItem($order),
+            'customer_details' => $pembeli,
         ]));
+    }
+
+    /**
+     * Rincian barang untuk ditampilkan Midtrans.
+     *
+     * Jumlah harga x kuantitas seluruh baris wajib sama persis dengan
+     * gross_amount; kalau meleset satu rupiah pun, Midtrans menolak permintaan
+     * tokennya dan pembeli melihat "Gagal terhubung ke server pembayaran".
+     * Karena itu kalau jumlahnya tidak cocok - misalnya ada potongan yang tidak
+     * terwakili baris mana pun - seluruh rinciannya diganti satu baris sebesar
+     * total. Lebih baik rinciannya kasar daripada pembayarannya gagal terbit.
+     */
+    public static function rincianItem(Order $order): array
+    {
+        $items = $order->relationLoaded('items') ? $order->items : $order->items()->get();
+
+        $rincian = $items->map(fn ($item) => [
+            'id' => (string) ($item->package_id ?? $item->id),
+            // Midtrans memotong nama di 50 karakter; dipotong di sini supaya
+            // yang tampil tetap kalimat utuh, bukan terpenggal sembarangan.
+            'name' => mb_substr((string) ($item->package_name_snapshot ?: 'Paket Tryout'), 0, 50),
+            'price' => (int) round((float) $item->price),
+            'quantity' => (int) ($item->qty ?: 1),
+        ])->values()->all();
+
+        $jumlah = array_sum(array_map(
+            fn ($baris) => $baris['price'] * $baris['quantity'],
+            $rincian,
+        ));
+
+        if ($rincian === [] || $jumlah !== (int) round((float) $order->grand_total)) {
+            return [[
+                'id' => $order->order_code,
+                'name' => 'Paket Tryout UrClass',
+                'price' => (int) round((float) $order->grand_total),
+                'quantity' => 1,
+            ]];
+        }
+
+        return $rincian;
     }
 
     /**
