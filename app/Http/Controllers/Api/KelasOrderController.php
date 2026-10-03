@@ -83,7 +83,7 @@ class KelasOrderController extends Controller
         ];
 
         try {
-            $snapToken = Snap::getSnapToken($params);
+            $snapToken = Snap::getSnapToken(OrderController::denganMetodePembayaran($params));
         } catch (\Exception $e) {
             return response()->json(['message' => 'Gagal terhubung ke server pembayaran.'], 500);
         }

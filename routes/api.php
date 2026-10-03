@@ -35,6 +35,7 @@ use App\Http\Controllers\Api\AdminTicketRedeemCodeController;
 use App\Http\Controllers\Api\AdminTryoutProofController;
 use App\Http\Controllers\Api\BulkImportQuestionController;
 use App\Http\Controllers\Api\SubtestCategoryController;
+use App\Http\Controllers\Api\PromoBannerController;
 use App\Http\Controllers\Api\TrackCardController;
 use App\Http\Controllers\Api\TicketLogController;
 use App\Http\Controllers\Api\AdminTestimonialController;
@@ -88,6 +89,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/profile/kategori', [ProfileController::class, 'updateKategori'])->middleware('throttle:15,1');
     Route::post('/access-codes/redeem', [AccessCodeController::class, 'redeem']);
     Route::get('/ticket-logs', [TicketLogController::class, 'index']);
+
+    // Banner promosi untuk jalur peserta ini. Di dalam grup ber-auth karena
+    // jalurnya diambil dari akunnya, bukan dari parameter yang bisa diubah.
+    Route::get('/promo-banners', [PromoBannerController::class, 'index']);
 
     // Dibaca halaman pendaftaran tryout gratis untuk menampilkan akun yang
     // harus di-follow sekaligus menentukan berapa bukti yang diminta.
@@ -277,6 +282,11 @@ Route::middleware(['auth:sanctum', 'admin'])
 
         // Hanya baca dan ubah: kategorinya tetap dua, jadi tidak ada yang bisa
         // dibuat atau dihapus - hanya teksnya yang berubah.
+        Route::get('/promo-banners', [PromoBannerController::class, 'adminIndex']);
+        Route::post('/promo-banners', [PromoBannerController::class, 'store']);
+        Route::post('/promo-banners/{promoBanner}', [PromoBannerController::class, 'update']);
+        Route::delete('/promo-banners/{promoBanner}', [PromoBannerController::class, 'destroy']);
+
         Route::get('/track-cards', [TrackCardController::class, 'adminIndex']);
         Route::put('/track-cards/{kategori}', [TrackCardController::class, 'update']);
         Route::post('/track-cards/{kategori}/reset', [TrackCardController::class, 'reset']);

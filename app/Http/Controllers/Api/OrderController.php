@@ -12,6 +12,7 @@ use App\Services\EnrollmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Midtrans\Config;
 use Midtrans\Snap;
@@ -211,6 +212,28 @@ class OrderController extends Controller
             return response()->json(['message' => 'Hanya order dengan status pending yang bisa dibatalkan.'], 422);
         }
 
+        // Dibatalkan juga di Midtrans, bukan cuma di sini.
+        //
+        // Tanpa ini, nomor virtual account atau tagihan yang sudah terbit tetap
+        // bisa dibayar peserta setelah ia membatalkan - dan callback pembayaran
+        // akan meluluskan order yang sudah berstatus cancelled.
+        //
+        // Gagalnya dibiarkan: transaksinya mungkin belum pernah ada di Midtrans
+        // (token dibuat tapi Snap tidak pernah dibuka), atau statusnya sudah
+        // tidak bisa dibatalkan. Dua-duanya bukan alasan menahan pembatalan di
+        // sisi kita, yang justru dibutuhkan peserta supaya bisa memesan ulang.
+        Config::$serverKey = config('midtrans.server_key');
+        Config::$isProduction = config('midtrans.is_production');
+
+        try {
+            Transaction::cancel($order->order_code);
+        } catch (\Exception $e) {
+            Log::info('Midtrans cancel dilewati', [
+                'order' => $order->order_code,
+                'alasan' => $e->getMessage(),
+            ]);
+        }
+
         $order->update(['status' => 'cancelled']);
         AuditLogger::log('Order', 'cancel', "Order dibatalkan: #{$order->order_code}", $request->user(), $order);
 
@@ -224,7 +247,7 @@ class OrderController extends Controller
         Config::$isSanitized = config('midtrans.is_sanitized');
         Config::$is3ds = config('midtrans.is_3ds');
 
-        return Snap::getSnapToken([
+        return Snap::getSnapToken(self::denganMetodePembayaran([
             'transaction_details' => [
                 'order_id' => $order->order_code,
                 'gross_amount' => $order->grand_total,
@@ -238,7 +261,25 @@ class OrderController extends Controller
                 'first_name' => $request->user()->name ?? 'Siswa',
                 'email' => $request->user()->email,
             ],
-        ]);
+        ]));
+    }
+
+    /**
+     * Menyisipkan daftar metode pembayaran, kalau memang dikunci.
+     *
+     * Dibiarkan kosong berarti Snap menampilkan apa pun yang aktif di dashboard
+     * Midtrans - dan itu bawaannya, supaya mengaktifkan metode baru tidak perlu
+     * deploy. Kuncinya dipakai kalau hanya metode tertentu yang boleh muncul.
+     */
+    public static function denganMetodePembayaran(array $params): array
+    {
+        $metode = config('midtrans.enabled_payments');
+
+        if (! empty($metode)) {
+            $params['enabled_payments'] = $metode;
+        }
+
+        return $params;
     }
 
     private function canReusePendingOrder(Order $order): bool

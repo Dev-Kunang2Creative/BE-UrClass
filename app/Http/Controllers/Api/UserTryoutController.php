@@ -469,27 +469,18 @@ class UserTryoutController extends Controller
                     ->where('tryout_id', $tryout->id)
                     ->max('attempt_number')) + 1;
 
-                // Satu tiket untuk satu kali pengerjaan. Tiket yang dipotong
-                // saat mendaftar hanya membayar percobaan pertama, jadi setiap
-                // pengulangan tryout premium harus membayar lagi - kalau tidak,
-                // satu tiket berlaku untuk percobaan tanpa batas.
-                if ($nextAttemptNumber > 1 && ! $tryout->is_free) {
-                    if ($lockedUser->ticket_balance <= 0) {
-                        return false;
-                    }
-
-                    $lockedUser->decrement('ticket_balance', 1);
-
-                    TicketLog::create([
-                        'user_id'     => $lockedUser->id,
-                        'type'        => 'debit',
-                        'amount'      => 1,
-                        'source'      => 'tryout',
-                        'description' => 'Kerjakan ulang: ' . $tryout->title,
-                    ]);
-
-                    $ticketBalanceRemaining = $lockedUser->fresh()->ticket_balance;
-                }
+                // Pengulangan tidak menagih tiket, di jalur mana pun.
+                //
+                // Aturannya pernah sebaliknya: tiket yang dipotong saat
+                // mendaftar hanya membayar percobaan pertama, dan tiap
+                // pengulangan tryout premium memotong satu tiket lagi. Atas
+                // permintaan pengguna, satu tiket sekarang membeli akses ke
+                // tryout itu - bukan satu kali pengerjaan - sehingga peserta
+                // boleh berlatih berapa kali pun.
+                //
+                // Kuncinya tetap dipasang meski tidak ada lagi yang dipotong:
+                // ia yang mencegah dua permintaan start bersamaan membuat dua
+                // percobaan dengan nomor yang sama.
 
                 $session = TryoutSession::create([
                     'user_id' => $user->id,
@@ -502,10 +493,12 @@ class UserTryoutController extends Controller
                 return true;
             });
 
+            // Transaksinya kini hanya bisa gagal kalau baris penggunanya hilang
+            // di tengah - tidak ada lagi penolakan karena saldo tiket.
             if (! $charged) {
                 return response()->json([
-                    'message' => 'Tiket tidak cukup untuk mengulang tryout ini. Satu tiket berlaku untuk satu kali pengerjaan.',
-                ], 403);
+                    'message' => 'Gagal memulai tryout. Silakan coba lagi.',
+                ], 422);
             }
         }
 
