@@ -41,6 +41,27 @@ class MetodePembayaranTest extends TestCase
         $this->assertSame(['other_qris', 'gopay'], $params['enabled_payments']);
     }
 
+    public function test_kode_salah_ketik_diabaikan_bukan_diteruskan(): void
+    {
+        // Snap menanggapi kode asing dengan menampilkan NOL metode tanpa pesan
+        // galat apa pun, jadi "qris" alih-alih "other_qris" akan terbaca seperti
+        // akun Midtrans yang belum diaktifkan.
+        config(['midtrans.enabled_payments' => ['qris']]);
+
+        $params = OrderController::denganMetodePembayaran([]);
+
+        $this->assertArrayNotHasKey('enabled_payments', $params);
+    }
+
+    public function test_kode_sah_tetap_dipakai_walau_ada_yang_salah_ketik(): void
+    {
+        config(['midtrans.enabled_payments' => ['other_qris', 'qriss']]);
+
+        $params = OrderController::denganMetodePembayaran([]);
+
+        $this->assertSame(['other_qris'], $params['enabled_payments']);
+    }
+
     public function test_setelan_dibaca_dari_env_dengan_spasi_dibuang(): void
     {
         // "other_qris, gopay" ditulis dengan spasi setelah koma adalah hal yang

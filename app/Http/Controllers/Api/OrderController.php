@@ -315,18 +315,46 @@ class OrderController extends Controller
     }
 
     /**
+     * Kode metode pembayaran yang dikenal Snap.
+     *
+     * Dipakai menyaring setelan, bukan membatasi apa yang boleh aktif di
+     * dashboard. Kode di luar daftar ini hampir pasti salah ketik.
+     */
+    public const METODE_DIKENAL = [
+        'credit_card', 'gopay', 'shopeepay', 'other_qris', 'bank_transfer',
+        'bca_va', 'bni_va', 'bri_va', 'cimb_va', 'permata_va', 'other_va',
+        'echannel', 'indomaret', 'alfamart', 'akulaku', 'kredivo', 'dana',
+        'uob_ezpay', 'danamon_online', 'bca_klikpay', 'bca_klikbca', 'cimb_clicks',
+    ];
+
+    /**
      * Menyisipkan daftar metode pembayaran, kalau memang dikunci.
      *
      * Dibiarkan kosong berarti Snap menampilkan apa pun yang aktif di dashboard
      * Midtrans - dan itu bawaannya, supaya mengaktifkan metode baru tidak perlu
      * deploy. Kuncinya dipakai kalau hanya metode tertentu yang boleh muncul.
+     *
+     * Kode yang tidak dikenal dibuang, bukan diteruskan. Snap menanggapi kode
+     * asing dengan menampilkan NOL metode dan tanpa pesan galat apa pun, jadi
+     * satu salah ketik di .env - "qris" alih-alih "other_qris" - akan terbaca
+     * seperti akun Midtrans yang belum diaktifkan. Lebih baik jatuh kembali ke
+     * perilaku dashboard sambil mencatat sebabnya di log.
      */
     public static function denganMetodePembayaran(array $params): array
     {
-        $metode = config('midtrans.enabled_payments');
+        $metode = (array) config('midtrans.enabled_payments');
+        $dikenal = array_values(array_intersect($metode, self::METODE_DIKENAL));
+        $asing = array_values(array_diff($metode, self::METODE_DIKENAL));
 
-        if (! empty($metode)) {
-            $params['enabled_payments'] = $metode;
+        if ($asing !== []) {
+            Log::warning('MIDTRANS_ENABLED_PAYMENTS memuat kode yang tidak dikenal', [
+                'diabaikan' => $asing,
+                'dipakai' => $dikenal !== [] ? $dikenal : 'mengikuti dashboard Midtrans',
+            ]);
+        }
+
+        if ($dikenal !== []) {
+            $params['enabled_payments'] = $dikenal;
         }
 
         return $params;
