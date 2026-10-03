@@ -41,7 +41,10 @@ class AdminUserController extends Controller
             ->latest()
             ->when($request->search, fn($q, $s) => $q->where(function ($searchQuery) use ($s) {
                 $searchQuery->where('name', 'like', "%{$s}%")
-                    ->orWhere('email', 'like', "%{$s}%");
+                    ->orWhere('email', 'like', "%{$s}%")
+                    // Admin sering hanya tahu akun Instagram-nya - dari komentar
+                    // atau DM - bukan nama lengkap yang didaftarkan.
+                    ->orWhere('instagram', 'like', '%'.ltrim($s, '@').'%');
             }))
             ->paginate($perPage);
 
@@ -260,24 +263,28 @@ class AdminUserController extends Controller
     public function export(Request $request): StreamedResponse
     {
         $users = User::real()->where('role', 'user')
-            ->when($request->search, fn($q, $s) =>
-                $q->where('name', 'like', "%{$s}%")->orWhere('email', 'like', "%{$s}%")
-            )
+            // Dibungkus satu kelompok: tanpa itu, orWhere lolos dari syarat
+            // role dan akun admin ikut terekspor saat ada pencarian.
+            ->when($request->search, fn($q, $s) => $q->where(fn ($cari) =>
+                $cari->where('name', 'like', "%{$s}%")
+                    ->orWhere('email', 'like', "%{$s}%")
+                    ->orWhere('instagram', 'like', '%'.ltrim($s, '@').'%')
+            ))
             ->latest()
-            ->get(['name', 'email', 'phone_number', 'school_origin', 'grade_level', 'created_at']);
+            ->get(['name', 'email', 'phone_number', 'instagram', 'school_origin', 'grade_level', 'created_at']);
 
         $spreadsheet = new Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
         $sheet->setTitle('Data Pengguna');
 
-        $headers = ['No', 'Nama', 'Email', 'No. HP', 'Asal Sekolah', 'Kelas', 'Tanggal Daftar'];
+        $headers = ['No', 'Nama', 'Email', 'No. HP', 'Instagram', 'Asal Sekolah', 'Kelas', 'Tanggal Daftar'];
         $sheet->fromArray($headers, null, 'A1');
 
         $headerStyle = [
             'font'    => ['bold' => true, 'color' => ['argb' => 'FFFFFFFF']],
             'fill'    => ['fillType' => Fill::FILL_SOLID, 'startColor' => ['argb' => 'FF004AAB']],
         ];
-        $sheet->getStyle('A1:G1')->applyFromArray($headerStyle);
+        $sheet->getStyle('A1:H1')->applyFromArray($headerStyle);
 
         foreach ($users as $i => $user) {
             $sheet->fromArray([
@@ -285,13 +292,14 @@ class AdminUserController extends Controller
                 $user->name,
                 $user->email,
                 $user->phone_number ?? '-',
+                $user->instagram ? '@'.$user->instagram : '-',
                 $user->school_origin ?? '-',
                 $user->grade_level ?? '-',
                 $user->created_at->format('d/m/Y'),
             ], null, 'A' . ($i + 2));
         }
 
-        foreach (range('A', 'G') as $col) {
+        foreach (range('A', 'H') as $col) {
             $sheet->getColumnDimension($col)->setAutoSize(true);
         }
 

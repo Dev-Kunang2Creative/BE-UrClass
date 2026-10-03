@@ -23,6 +23,7 @@ class User extends Authenticatable
         'kategori',
         'google_id',
         'phone_number',
+        'instagram',
         'birth_date',
         'gender',
         'school_origin',

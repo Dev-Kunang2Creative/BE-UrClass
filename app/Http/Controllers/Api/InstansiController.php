@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\ExamSetting;
 use App\Models\Formasi;
 use App\Models\Instansi;
 use Illuminate\Http\JsonResponse;
@@ -108,10 +109,15 @@ class InstansiController extends Controller
     {
         $total = Formasi::query()->active()->count();
         $periode = Formasi::query()->active()->max('periode');
+        $ditampilkan = ExamSetting::formasiDitampilkan();
 
         return response()->json([
             'data' => [
-                'is_open' => $total > 0,
+                // Saklar admin. Selama mati, form profil tidak menyebut formasi
+                // sama sekali - bukan kolom, bukan juga pemberitahuan "belum
+                // dibuka" - dan formasi tidak diwajibkan.
+                'is_enabled' => $ditampilkan,
+                'is_open' => $ditampilkan && $total > 0,
                 'total' => $total,
                 // Selama belum ada formasi, periode yang diumumkan adalah tahun
                 // berjalan - itulah periode yang sedang ditunggu peserta.

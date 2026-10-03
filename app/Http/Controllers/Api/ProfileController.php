@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\ExamSetting;
 use App\Models\Formasi;
+use App\Support\AkunInstagram;
 use App\Support\AturanMasukan;
 use App\Support\Jenjang;
 use App\Support\NomorPonsel;
@@ -93,7 +95,10 @@ class ProfileController extends Controller
         // sudah diketahui tetapi formasinya belum ada sama sekali - dan pada masa
         // itu mewajibkannya berarti tidak ada pelamar CPNS umum yang bisa
         // menyimpan profilnya.
-        $formasiTersedia = Formasi::query()->active()->exists();
+        // Saklar admin juga ikut: selama formasi disembunyikan, kolomnya tidak
+        // ada di layar peserta, jadi tidak boleh diwajibkan.
+        $formasiTersedia = ExamSetting::formasiDitampilkan()
+            && Formasi::query()->active()->exists();
         $formasiRequired = $formasiTersedia ? $umumRequired : 'nullable';
 
         // Daftar kampus yang disaring menurut jenis hanya membentuk isi dropdown;
@@ -116,6 +121,14 @@ class ProfileController extends Controller
             ]);
         }
 
+        // Sama seperti nomor HP: "@nama", "nama", dan tautan profil semuanya
+        // berarti akun yang sama, jadi bentuknya dibakukan dulu baru diperiksa.
+        if ($request->has('instagram')) {
+            $request->merge([
+                'instagram' => AkunInstagram::normalkan($request->input('instagram')),
+            ]);
+        }
+
         $validated = $request->validate([
             'name' => ['required', 'string', 'max:'.AturanMasukan::NAMA_MAKS, 'regex:'.AturanMasukan::NAMA],
             // Dinormalkan ke bentuk +62 sebelum divalidasi, jadi peserta boleh
@@ -124,6 +137,9 @@ class ProfileController extends Controller
             'phone_number' => [$profileRequired, 'string', 'max:20', 'regex:'.AturanMasukan::TELEPON],
             'birth_date' => [$profileRequired, 'date'],
             'gender' => [$profileRequired, 'in:L,P'],
+            // Opsional: tidak semua peserta punya Instagram, dan memaksanya
+            // hanya mengundang isian asal-asalan.
+            'instagram' => ['nullable', 'string', 'max:30', 'regex:'.AkunInstagram::POLA],
 
             'school_origin' => [$profileRequired, 'string', 'max:255', 'regex:'.AturanMasukan::TEKS_PENDEK],
             'grade_level' => [$profileRequired, 'string', 'max:50', 'regex:'.AturanMasukan::TEKS_PENDEK],
@@ -159,6 +175,8 @@ class ProfileController extends Controller
             'target_formasi_2' => ['nullable', 'string', 'max:255', 'regex:/^[^\<\>]+$/u'],
         ], [
             ...AturanMasukan::pesan(),
+            'instagram.regex' => AkunInstagram::PESAN,
+            'instagram.max' => AkunInstagram::PESAN,
             'education_major.required' => 'Jurusan pendidikan terakhir harus diisi.',
             'education_major.regex' => 'Jurusan mengandung karakter yang tidak diperbolehkan.',
             'target_university_1.regex' => 'Pilihan universitas tidak boleh mengandung tag HTML.',

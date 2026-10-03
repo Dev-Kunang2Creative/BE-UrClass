@@ -1208,6 +1208,10 @@ class UserTryoutController extends Controller
 
                 if ($includeProofImages) {
                     $row['is_dummy'] = (bool) $session->user?->is_dummy;
+                    // Hanya untuk admin, di blok yang sama dengan bukti follow:
+                    // papan ini juga dibaca sesama peserta, dan akun Instagram
+                    // adalah data pribadi yang tidak mereka bagikan untuk itu.
+                    $row['instagram'] = $session->user?->instagram;
                     $access = $proofsByUser->get($session->user_id);
                     $proofImages = collect($access?->proof_images ?: ($access?->proof_image ? [$access->proof_image] : []))
                         ->filter()

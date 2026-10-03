@@ -212,32 +212,71 @@ class OrderController extends Controller
             return response()->json(['message' => 'Hanya order dengan status pending yang bisa dibatalkan.'], 422);
         }
 
-        // Dibatalkan juga di Midtrans, bukan cuma di sini.
+        // Dihentikan juga di Midtrans, bukan cuma di sini. Tanpa ini transaksi
+        // di sana tetap pending: peserta masih menerima email pengingat untuk
+        // pesanan yang sudah ia batalkan, dan QRIS atau nomor VA-nya tetap bisa
+        // dibayar - lalu callback meluluskan pesanan yang sudah cancelled.
         //
-        // Tanpa ini, nomor virtual account atau tagihan yang sudah terbit tetap
-        // bisa dibayar peserta setelah ia membatalkan - dan callback pembayaran
-        // akan meluluskan order yang sudah berstatus cancelled.
-        //
-        // Gagalnya dibiarkan: transaksinya mungkin belum pernah ada di Midtrans
-        // (token dibuat tapi Snap tidak pernah dibuka), atau statusnya sudah
-        // tidak bisa dibatalkan. Dua-duanya bukan alasan menahan pembatalan di
-        // sisi kita, yang justru dibutuhkan peserta supaya bisa memesan ulang.
-        Config::$serverKey = config('midtrans.server_key');
-        Config::$isProduction = config('midtrans.is_production');
-
-        try {
-            Transaction::cancel($order->order_code);
-        } catch (\Exception $e) {
-            Log::info('Midtrans cancel dilewati', [
-                'order' => $order->order_code,
-                'alasan' => $e->getMessage(),
-            ]);
-        }
+        // Kegagalannya tidak menahan pembatalan di sisi kita, yang justru
+        // dibutuhkan peserta supaya bisa memesan ulang dengan metode lain.
+        self::hentikanDiMidtrans($order);
 
         $order->update(['status' => 'cancelled']);
         AuditLogger::log('Order', 'cancel', "Order dibatalkan: #{$order->order_code}", $request->user(), $order);
 
         return response()->json(['message' => 'Order berhasil dibatalkan.']);
+    }
+
+    /**
+     * Menghentikan transaksi sebuah pesanan di Midtrans.
+     *
+     * Memakai `expire`, bukan `cancel`. Dulu yang dipanggil `cancel`, padahal
+     * itu API untuk transaksi kartu; untuk QRIS, GoPay, VA, dan gerai yang
+     * masih pending - satu-satunya jenis pesanan yang boleh dibatalkan peserta -
+     * Midtrans menolaknya, sehingga transaksinya tetap pending sampai
+     * kedaluwarsa sendiri dan email pengingatnya tetap terkirim. `cancel`
+     * dipertahankan sebagai cadangan untuk kartu.
+     */
+    public static function hentikanDiMidtrans(Order $order): void
+    {
+        // Token belum pernah terbit berarti transaksinya tidak pernah ada di
+        // Midtrans - tidak ada yang perlu dihentikan, dan tidak perlu menunggu
+        // satu panggilan jaringan untuk mengetahuinya.
+        if (! $order->midtrans_order_id) {
+            return;
+        }
+
+        Config::$serverKey = config('midtrans.server_key');
+        Config::$isProduction = config('midtrans.is_production');
+
+        try {
+            Transaction::expire($order->order_code);
+
+            return;
+        } catch (\Exception $e) {
+            // 404: token terbit tapi peserta belum pernah memilih metode, jadi
+            // transaksinya belum dibuat di Midtrans. Tidak ada pengingat yang
+            // akan terkirim untuknya.
+            if ((int) $e->getCode() === 404) {
+                return;
+            }
+
+            $kodeExpire = (int) $e->getCode();
+        }
+
+        try {
+            Transaction::cancel($order->order_code);
+        } catch (\Exception $e) {
+            // Level error, bukan info: server memakai LOG_LEVEL=error, dan
+            // kegagalan di sini berarti pesanan yang sudah dibatalkan masih
+            // bisa dibayar. Hanya kode statusnya yang dicatat - badan galat
+            // penyedia tidak masuk log.
+            Log::error('Gagal menghentikan transaksi di Midtrans', [
+                'order' => $order->order_code,
+                'kode_expire' => $kodeExpire,
+                'kode_cancel' => (int) $e->getCode(),
+            ]);
+        }
     }
 
     private function createSnapToken(Order $order, Request $request): string
@@ -346,8 +385,11 @@ class OrderController extends Controller
         $dikenal = array_values(array_intersect($metode, self::METODE_DIKENAL));
         $asing = array_values(array_diff($metode, self::METODE_DIKENAL));
 
+        // Level error, bukan warning: produksi memakai LOG_LEVEL=error, jadi
+        // warning tidak pernah tercatat - dan salah ketik di .env ini justru
+        // yang perlu ditemukan.
         if ($asing !== []) {
-            Log::warning('MIDTRANS_ENABLED_PAYMENTS memuat kode yang tidak dikenal', [
+            Log::error('MIDTRANS_ENABLED_PAYMENTS memuat kode yang tidak dikenal', [
                 'diabaikan' => $asing,
                 'dipakai' => $dikenal !== [] ? $dikenal : 'mengikuti dashboard Midtrans',
             ]);

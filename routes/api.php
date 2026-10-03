@@ -220,6 +220,7 @@ Route::middleware(['auth:sanctum', 'admin'])
         Route::get('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'formasi']);
         Route::post('/instansi/{instansi}/formasi', [AdminInstansiController::class, 'storeFormasi']);
         Route::delete('/instansi/{instansi}/formasi/{formasi}', [AdminInstansiController::class, 'destroyFormasi']);
+        Route::put('/formasi/tampilan', [AdminInstansiController::class, 'aturTampilanFormasi']);
 
         // Impor massal. Satu periode seleksi bisa memuat ribuan formasi, jadi
         // mengisinya lewat form per baris bukan pilihan yang masuk akal.

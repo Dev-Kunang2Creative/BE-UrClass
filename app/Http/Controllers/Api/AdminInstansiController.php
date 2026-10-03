@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\ExamSetting;
 use App\Models\Formasi;
 use App\Models\Instansi;
 use App\Services\AuditLogger;
@@ -149,5 +150,36 @@ class AdminInstansiController extends Controller
         $formasi->delete();
 
         return response()->json(['message' => 'Formasi berhasil dihapus.']);
+    }
+
+    /**
+     * Menampilkan atau menyembunyikan formasi dari form profil peserta.
+     *
+     * Datanya tidak disentuh: formasi yang sudah diunggah dan pilihan formasi
+     * yang sudah disimpan peserta tetap ada, dan muncul lagi begitu saklarnya
+     * dinyalakan.
+     */
+    public function aturTampilanFormasi(Request $request): JsonResponse
+    {
+        $data = $request->validate(['ditampilkan' => ['required', 'boolean']]);
+
+        $pengaturan = ExamSetting::updateOrCreate(['id' => 1], [
+            'formasi_ditampilkan' => (bool) $data['ditampilkan'],
+        ]);
+
+        AuditLogger::log(
+            'Formasi', 'visibility',
+            $pengaturan->formasi_ditampilkan
+                ? 'Formasi ditampilkan ke peserta'
+                : 'Formasi disembunyikan dari peserta',
+            $request->user(),
+        );
+
+        return response()->json([
+            'message' => $pengaturan->formasi_ditampilkan
+                ? 'Formasi ditampilkan ke peserta.'
+                : 'Formasi disembunyikan dari peserta.',
+            'data' => ['ditampilkan' => $pengaturan->formasi_ditampilkan],
+        ]);
     }
 }

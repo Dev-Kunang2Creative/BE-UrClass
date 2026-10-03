@@ -83,6 +83,25 @@ class BatalkanPesananTest extends TestCase
         );
     }
 
+    public function test_pesanan_tanpa_token_tidak_menghubungi_midtrans_sama_sekali(): void
+    {
+        // Token belum terbit berarti transaksinya tidak pernah ada di Midtrans.
+        // Kunci server sengaja dibuat tidak sah: kalau aplikasi tetap mencoba
+        // menghubungi Midtrans, panggilannya akan gagal dan tercatat sebagai
+        // galat - jadi yang diuji di sini adalah bahwa ia tidak mencoba.
+        config(['midtrans.server_key' => 'kunci-tidak-sah']);
+        \Illuminate\Support\Facades\Log::spy();
+
+        $peserta = User::factory()->create();
+        $order = $this->pesanan($peserta);
+        $this->assertNull($order->midtrans_order_id);
+
+        $this->actingAs($peserta)->postJson("/api/orders/{$order->id}/cancel")->assertOk();
+
+        $this->assertSame('cancelled', $order->fresh()->status);
+        \Illuminate\Support\Facades\Log::shouldNotHaveReceived('error');
+    }
+
     public function test_pembatalan_tetap_berhasil_walau_midtrans_menolak(): void
     {
         // Transaksinya mungkin belum pernah ada di Midtrans - token dibuat tapi
